@@ -1,0 +1,8 @@
+{"@timestamp": "2026-03-10T09:00:00+02:00", "username": "zoe", "source": {"ip": "10.0.0.5"}, "result": "Failed", "type": "logon", "weird_field": 1}
+
+{"time": 1773133200, "hostname": "h1", "image": "powershell.exe", "cmdline": "powershell -nop", "type": "process_creation"}
+{"time": "2026-03-10 09:05:00", "user": "zoe", "src_ip": "not-an-ip", "dst_port": 70000}
+{"user": "no_timestamp_here"}
+this is not json
+[1, 2, 3]
+{"timestamp": "garbage", "user": "x"}
