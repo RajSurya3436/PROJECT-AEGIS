@@ -169,3 +169,22 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - Ask is a separate short loop (`ChatService._answer`), not a run: read-only `ToolContext`,
   `AGENT_MAX_ASK_STEPS` model calls, IDs in the answer checked against stored data.
 - Not done on purpose: chat transcript in the exported report and an audit view (Phase 7).
+
+### Phase 6 review fixes (2026-10-30)
+
+From `/code-review` of the Phase 6 commit; each has a test.
+
+- A pause or stop requested while a run is still queued is honoured (`claim` no longer clears
+  `control`). A closed investigation is checked before control requests, so the reason shown
+  is accurate.
+- Stopping never overwrites a run that finished meanwhile (`stop_unfinished`).
+- `AgentRunner.launch` on a run whose worker is winding down re-executes it in that worker.
+- The Agents tab only shows Pause/Resume/Stop on the run those buttons act on
+  (`ChatService.controlled_run`).
+- A stopped run discards its pending instructions.
+- Directives are queued and routed one at a time when the work returns to the orchestrator;
+  a turn with no steps is dropped without a note or using a turn. Bonus turns: specialists and
+  orchestrator only, capped at `AGENT_MAX_SPECIALIST_TURNS`.
+- The step limit is checked before a run waits for the analyst.
+- Ask does not flag 32-hex strings (e.g. MD5s) that appeared in the data it was shown.
+- Instructions that arrive during the verifier's step get an automatic follow-up run.

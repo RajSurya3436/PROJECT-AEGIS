@@ -115,7 +115,11 @@ class RunState(BaseModel):
     elapsed_seconds: float = 0.0
     analyst_messages: list[dict[str, str]] = Field(default_factory=list)
     waiting_question: str = ""  # set while the run waits for the analyst's reply
-    bonus_turns: int = 0  # extra specialist turns granted by analyst directives
+    bonus_turns: int = 0  # extra specialist turns granted by analyst directives (capped)
+    # Analyst instructions not yet routed, oldest first. One is routed each time the work
+    # comes back to the orchestrator, so several instructions are carried out in order.
+    queued: list[dict[str, Any]] = Field(default_factory=list)
+    awaiting_route: bool = False  # an untargeted instruction waits for the orchestrator
 
 
 class RunControls(Protocol):
@@ -174,18 +178,18 @@ class AgentGraph:
         while state.node != "done":
             state.elapsed_seconds = base_elapsed + (self._clock() - started)
             self._checkpoint(run_id, state)
+            if self.investigations.get(investigation_id).status is not InvestigationStatus.OPEN:
+                return RunOutcome(AgentRunStatus.STOPPED, error="the investigation was closed")
             requested = controls.requested()
             if requested == "stop":
                 return RunOutcome(AgentRunStatus.STOPPED, error="stopped by the analyst")
             if requested == "pause":
                 self._log(run_id, AgentRole.ORCHESTRATOR, "control", "paused by the analyst")
                 return RunOutcome(AgentRunStatus.PAUSED)
-            if self.investigations.get(investigation_id).status is not InvestigationStatus.OPEN:
-                return RunOutcome(AgentRunStatus.STOPPED, error="the investigation was closed")
             directives = controls.take_directives()
-            for directive in directives:
-                self._apply(run_id, state, directive)
             if directives:
+                self._receive(run_id, state, directives)
+            if self._route_queued(run_id, state) or directives:
                 self._checkpoint(run_id, state)
             if state.waiting_question:
                 return RunOutcome(AgentRunStatus.WAITING)
@@ -228,45 +232,73 @@ class AgentGraph:
             return self._specialist(run_id, investigation_id, state)
         return self._verify(run_id, investigation_id, state)
 
-    def _apply(self, run_id: str, state: RunState, directive: ChatEntry) -> None:
-        """Fold one analyst directive into the run. A reply answers the waiting question and
-        the turn carries on; instructions and redirects end the current turn and send the work
-        to the chosen specialist (or back to the orchestrator). Evidence and notes stay."""
-        text = directive.content.strip()
-        kind = directive.kind.value
-        message: dict[str, str] = {"kind": kind, "text": text}
-        if state.waiting_question:
-            message["in_reply_to"] = state.waiting_question
-            state.waiting_question = ""
-        state.analyst_messages = [*state.analyst_messages, message][-MAX_ANALYST_MESSAGES:]
-        if kind == "reply" and "in_reply_to" in message:
-            self._log(
-                run_id,
-                AgentRole.ORCHESTRATOR,
-                "redirect",
-                f"analyst replied: {text}",
-                {"message_id": directive.message_id, "text": text},
+    def _receive(self, run_id: str, state: RunState, directives: list[ChatEntry]) -> None:
+        """Take in a batch of analyst directives. A reply answers the waiting question and the
+        turn carries on. Instructions and redirects join the queue; if any arrived, the
+        current specialist turn is cut short once (not once per message). Evidence, notes and
+        the step log stay."""
+        interrupting = False
+        for directive in directives:
+            text = directive.content.strip()
+            kind = directive.kind.value
+            message: dict[str, str] = {"kind": kind, "text": text}
+            if state.waiting_question:
+                message["in_reply_to"] = state.waiting_question
+                state.waiting_question = ""
+            state.analyst_messages = [*state.analyst_messages, message][-MAX_ANALYST_MESSAGES:]
+            if kind == "reply" and "in_reply_to" in message:
+                self._log(
+                    run_id,
+                    AgentRole.ORCHESTRATOR,
+                    "redirect",
+                    f"analyst replied: {text}",
+                    {"message_id": directive.message_id, "text": text},
+                )
+                continue
+            interrupting = True
+            target = directive.target_role
+            state.queued.append(
+                {
+                    "message_id": directive.message_id,
+                    "kind": kind,
+                    "text": text,
+                    "target": target.value if target else None,
+                }
             )
-            return
-        target = directive.target_role
-        if state.node == "specialist":
-            self._end_turn(state, f"turn ended: redirected by the analyst ({text[:200]})")
-        state.bonus_turns += 1
+        if interrupting and state.node == "specialist":
+            if state.turn_steps:
+                self._end_turn(state, "turn ended: redirected by the analyst")
+            else:  # nothing was done yet: drop the turn without a note or using up a turn
+                state.node, state.role, state.instruction = "orchestrate", None, ""
+                state.turn, state.turn_steps = [], 0
+        if interrupting:
+            state.awaiting_route = False  # the newest instructions take over
+
+    def _route_queued(self, run_id: str, state: RunState) -> bool:
+        """Route the oldest queued instruction when the work is back with the orchestrator
+        (or about to be verified). Returns True if something was routed."""
+        if not state.queued or state.awaiting_route or state.node == "specialist":
+            return False
+        item = state.queued.pop(0)
+        target = AgentRole(item["target"]) if item["target"] else None
+        if target is not AgentRole.VERIFIER:
+            state.bonus_turns = min(state.bonus_turns + 1, self.limits.max_specialist_turns)
         if target in (AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL):
-            state.node, state.role, state.instruction = "specialist", target, text
+            state.node, state.role, state.instruction = "specialist", target, item["text"]
             state.turn, state.turn_steps = [], 0
         elif target is AgentRole.VERIFIER:
             state.node = "verify"
         else:
-            state.node = "orchestrate"
+            state.node, state.awaiting_route = "orchestrate", True
         where = target.value if target else "orchestrator"
         self._log(
             run_id,
             AgentRole.ORCHESTRATOR,
             "redirect",
-            f"analyst {kind} -> {where}: {text}",
-            {"message_id": directive.message_id, "target": where, "text": text},
+            f"analyst {item['kind']} -> {where}: {item['text']}",
+            {"message_id": item["message_id"], "target": where, "text": item["text"]},
         )
+        return True
 
     def _orchestrate(self, run_id: str, investigation_id: str, state: RunState) -> None:
         ctx = self._tool_context(run_id, investigation_id, AgentRole.ORCHESTRATOR, state)
@@ -281,6 +313,7 @@ class AgentGraph:
             run_id, AgentRole.ORCHESTRATOR, prompts.ORCHESTRATOR, user, state, RouteDecision
         )
         self._sync(ctx, state)
+        state.awaiting_route = False
         if decision.next == "verifier":
             self._to_verifier(run_id, state, decision.rationale or "orchestrator chose to verify")
             return
@@ -364,15 +397,15 @@ class AgentGraph:
             }
         )
         state.turn_steps += 1
-        if ctx.waiting_question:
-            state.waiting_question = ctx.waiting_question
-            return RunOutcome(AgentRunStatus.WAITING)
         if state.turn_steps >= self.limits.max_steps_per_turn:
             self._end_turn(
                 state,
                 f"turn ended at the {self.limits.max_steps_per_turn}-step "
                 "limit before the specialist finished",
             )
+        if ctx.waiting_question:  # after the limit check: a reply never buys an extra step
+            state.waiting_question = ctx.waiting_question
+            return RunOutcome(AgentRunStatus.WAITING)
         return None
 
     def _verify(self, run_id: str, investigation_id: str, state: RunState) -> RunOutcome:

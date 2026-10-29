@@ -489,3 +489,30 @@ def test_background_runner_uses_its_own_connection(tmp_path, holder):
     ctx.agents.runs.set_status(run_id, AgentRunStatus.RUNNING)
     again = build_context(settings, model_factory=lambda _s: holder.model)
     assert again.agents.get(run_id).status is AgentRunStatus.INTERRUPTED
+
+
+def test_runner_relaunches_a_run_launched_while_its_worker_winds_down():
+    import threading
+
+    from app.agents.service import AgentRunner
+
+    release, entered = threading.Event(), threading.Event()
+    calls = []
+
+    class FakeService:
+        def execute(self, run_id):
+            calls.append(run_id)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(10)  # e.g. still announcing that the run paused
+
+    runner = AgentRunner(lambda: (FakeService(), lambda: None))
+    runner.launch("run-1")
+    assert entered.wait(10)
+    runner.launch("run-1")  # Resume pressed before the first worker has exited
+    release.set()
+    runner.join("run-1", timeout=10)
+    assert calls == ["run-1", "run-1"]
+    runner.launch("run-1")  # after the worker has left, a launch starts a new one
+    runner.join("run-1", timeout=10)
+    assert calls == ["run-1", "run-1", "run-1"]
