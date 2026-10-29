@@ -58,6 +58,33 @@ def render(ctx: AppContext) -> None:
     i1.metric("Open investigations", by_inv.get("open", 0))
     i2.metric("Closed investigations", by_inv.get("closed", 0))
 
+    st.subheader("Agent activity")
+    by_run = ctx.agents.runs.count_by_status()
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Running", by_run.get("running", 0) + by_run.get("queued", 0))
+    r2.metric("Completed runs", by_run.get("completed", 0))
+    r3.metric(
+        "Failed / stopped / limited",
+        sum(by_run.get(k, 0) for k in ("failed", "stopped", "limit_reached", "interrupted")),
+    )
+    recent_runs = ctx.agents.runs.recent(limit=5)
+    if recent_runs:
+        st.dataframe(
+            [
+                {
+                    "started (UTC)": r.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "investigation": r.investigation_id,
+                    "status": r.status.value,
+                    "proposed": r.assessment.disposition.value if r.assessment else "",
+                    "model calls": r.model_calls,
+                    "tool calls": r.tool_calls,
+                }
+                for r in recent_runs
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
     st.subheader("Integration status")
     s = ctx.settings
     status, _ = ollama_status(s.ollama_base_url, s.ollama_model)
@@ -72,6 +99,6 @@ def render(ctx: AppContext) -> None:
     external = "enabled" if ctx.reputation.external_enabled else "disabled"
     st.write(f"**External reputation lookups:** {external}")
     st.caption(
-        "Detection runs without Ollama. Manage providers and the lookup switch on **Settings**. "
-        "Agents arrive in a later phase."
+        "Detection, search and investigations run without Ollama; only agent runs need it. "
+        "Manage providers and the lookup switch on **Settings**."
     )

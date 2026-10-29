@@ -8,6 +8,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.enums import (
+    AgentRole,
+    AgentRunStatus,
     AlertStatus,
     Confidence,
     Disposition,
@@ -220,3 +222,46 @@ class TimelineEntry(BaseModel):
     scope_reason: str
     alert_match: bool = False  # linked to one of the investigation's alerts
     cited_by: list[str] = Field(default_factory=list)  # evidence IDs citing this event
+
+
+class Assessment(BaseModel):
+    """The verifier's proposal. Advisory: only an analyst closes an investigation, and closing
+    applies the usual evidence rules again. Every ID here was checked against stored evidence."""
+
+    disposition: Disposition
+    confidence: Confidence
+    rationale: str
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+    adjustments: list[str] = Field(default_factory=list)  # changes made by deterministic checks
+    open_questions: list[str] = Field(default_factory=list)  # from request_analyst_input
+
+
+class AgentRun(BaseModel):
+    run_id: str
+    investigation_id: str
+    status: AgentRunStatus
+    model: str
+    model_calls: int = 0
+    tool_calls: int = 0
+    checkpoint: dict[str, Any] = Field(default_factory=dict)
+    assessment: Assessment | None = None
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None = None
+
+
+class AgentStep(BaseModel):
+    """One entry of a run's activity log. ``payload`` holds validated, capped data."""
+
+    run_id: str
+    seq: int
+    role: AgentRole
+    kind: str  # route, model_output, tool_call, tool_result, tool_rejected, error, assessment
+    summary: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int | None = None
+    created_at: datetime

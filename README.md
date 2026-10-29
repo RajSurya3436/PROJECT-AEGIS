@@ -4,8 +4,8 @@ A local-first SOC investigation app: ingest security events, run deterministic d
 (in later phases) investigate alerts with tool-using agents and an evidence-backed report.
 It is an investigation layer, **not** a SIEM replacement.
 
-**Status: Phases 0 to 4 complete (data foundation, replay, deterministic detection, IP
-reputation, investigations and reports).** Working
+**Status: Phases 0 to 5 complete (data foundation, replay, deterministic detection, IP
+reputation, investigations and reports, agent graph).** Working
 today: JSONL/NDJSON/CSV/JSON import with field-mapping preview, UTC normalization, quarantine of
 malformed rows, a SQLite event store with search and related-event lookup, a bundled synthetic
 demo dataset with timed replay (speed, pause, resume, stop, restart), five versioned detection
@@ -13,9 +13,11 @@ rules that create event-linked alerts without any model, an alert queue with a s
 on-request IP reputation (local IOC list, optional AbuseIPDB and VirusTotal with cache, rate
 limits and retries), and a Streamlit UI (Overview, Events explorer, Alert queue, Data sources,
 Detection rules, Settings, Investigations). Investigations collect related events and
-evidence with provenance, record a disposition, and export Markdown/JSON reports. Not yet
-built: agents, chat, response planning, audit log. See
-[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md),
+evidence with provenance, record a disposition, and export Markdown/JSON reports. Agents
+(orchestrator, log investigator, threat intel, verifier on one local model) work an
+investigation through allowlisted tools and propose an evidence-checked assessment that the
+analyst can accept. Not yet built: chat, response planning, audit log. See
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md), [docs/agents.md](docs/agents.md),
 [docs/detection-rules.md](docs/detection-rules.md) and [docs/reputation.md](docs/reputation.md).
 
 ## Setup (Windows PowerShell)
@@ -71,9 +73,12 @@ Without keys the app still checks the local IOC list.
 
 ## Ollama
 
-The planned model is `qwen3:8b` (about 5 GB, fits 8 GB VRAM). It is not needed until Phase 5 and
-is never pulled automatically. `scripts\check_ollama.py` reports whether the server is reachable
-and the model is installed. With Ollama stopped, ingestion and search work normally.
+Agents use `qwen3:8b` (about 5 GB, fits 8 GB VRAM). It is never pulled automatically:
+run `ollama pull qwen3:8b` once, then `ollama serve`. `scripts\check_ollama.py` reports whether
+the server is reachable and the model is installed. Only loopback Ollama URLs are accepted.
+With Ollama stopped, everything except agent runs works; the **Agents** tab says AI is
+unavailable. Run limits (`AGENT_MAX_MODEL_CALLS` and others) are listed in
+[docs/agents.md](docs/agents.md).
 
 ## Troubleshooting
 
@@ -83,6 +88,10 @@ and the model is installed. With Ollama stopped, ingestion and search work norma
   `app/ingestion/field_aliases.py` if your timestamp field is not recognised.
 - *Dashboard says Ollama unavailable*: expected unless `ollama serve` is running. Detection and
   alerts do not need it.
+- *Agent run failed with "unusable model replies"*: the model did not return valid JSON three
+  times in a row; the step log on the **Agents** tab shows each rejected reply. Raise
+  `AGENT_MODEL_TIMEOUT_SECONDS` if the errors are timeouts.
+- *Agent run shows "interrupted"*: the app stopped mid-run. Press **Resume from checkpoint**.
 - *No IOC alert after uploading your own data*: load the IOC list first (the demo load does it),
   or press **Re-run detection** on the Detection rules page.
 - *Reputation shows "skipped" for demo IPs*: expected. The demo uses documentation ranges

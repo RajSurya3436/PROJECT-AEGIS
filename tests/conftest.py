@@ -24,3 +24,13 @@ def _no_reputation_network(monkeypatch):
         raise AssertionError("tests must not contact reputation providers")
 
     monkeypatch.setattr("app.tools.reputation.http._urlopen", refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_model_server(monkeypatch):
+    """Agent tests use scripted models; a real Ollama call from a test is a bug."""
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("tests must not contact Ollama")
+
+    monkeypatch.setattr("app.agents.llm.urllib_post", refuse)

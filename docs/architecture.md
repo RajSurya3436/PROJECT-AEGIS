@@ -18,7 +18,8 @@ demo dataset / file upload   (file tail, HTTP receiver: later phases)
             |
  InvestigationService (app/investigations/) -> scope, evidence, timeline
             |                                       -> reports (app/reporting/)
- [Phase 5+] agents call the same service methods as tools
+ AgentGraph (app/agents/) -> allowlisted tools -> the same service methods
+   orchestrator / log investigator / threat intel / verifier; one local model (Ollama)
                  |
      ReputationService (app/tools/reputation/)   <- on request only, never per event
        local IOC list + cache (reputation_cache) + AbuseIPDB / VirusTotal over HTTPS
@@ -46,12 +47,15 @@ Replay (`app/ingestion/replay.py`) feeds `IngestionService` like any other sourc
 | `app/reporting/report.py` | deterministic report model, JSON and escaped Markdown |
 | `app/storage/investigations.py` | investigations, alert links, scope, evidence (all SQL) |
 | `app/storage/reputation.py` | reputation cache (all SQL); `AppSettingsRepository` in `repositories.py` holds the lookup switch |
+| `app/agents/` | model client, output schemas, tool allowlist, prompts, state machine, run service and background runner (see `docs/agents.md`) |
+| `app/storage/agents.py` | agent runs with checkpoints, step log (all SQL) |
+| `app/ui/agents_panel.py` | Agents tab: run, stop, resume, activity log, verifier assessment |
 
 ## Rules
 
 - UTC everywhere internally; naive input timestamps are assumed UTC and flagged.
 - SQLite: foreign keys on, WAL for file databases, explicit transactions
   (`app.storage.db.transaction`), versioned migrations tracked in `schema_migrations`.
-- No logic in UI callbacks. No model-generated SQL or code, ever (enforced from Phase 5).
+- No logic in UI callbacks. No model-generated SQL or code, ever (a test parses `app/agents/`).
 - Event content (messages, command lines, user agents) is untrusted data and is rendered with
   escaping widgets (`st.json`, `st.dataframe`).
