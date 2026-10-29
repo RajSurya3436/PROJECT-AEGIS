@@ -7,11 +7,12 @@ from app.storage.db import current_version, migrate, open_database, transaction
 
 def test_migrations_apply_once_and_are_idempotent():
     conn = open_database(":memory:")
-    assert current_version(conn) == 4
+    assert current_version(conn) == 5
     assert migrate(conn) == []
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "data_sources", "parse_errors", "app_settings", "schema_migrations"} <= tables
     assert {"detection_rules", "alerts", "alert_events", "local_iocs", "reputation_cache"} <= tables
+    assert {"investigations", "evidence", "agent_runs", "agent_steps"} <= tables
 
 
 def test_foreign_keys_enforced():

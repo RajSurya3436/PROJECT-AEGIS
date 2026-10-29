@@ -16,6 +16,7 @@ from app.domain.errors import SocCopilotError
 from app.domain.models import Evidence, Investigation, TimelineEntry
 from app.reporting.report import build_report, to_json, to_markdown
 from app.storage.repositories import CORRELATION_FIELDS
+from app.ui import agents_panel
 
 ANALYST = "analyst"
 SELECTED = "investigation_id"
@@ -28,8 +29,8 @@ def _time(value: datetime | None) -> str:
 def render(ctx: AppContext) -> None:
     st.title("Investigations")
     st.caption(
-        "Deterministic workspace: related events, evidence with provenance, verdict and report. "
-        "Agents and chat arrive in later phases. Log values are shown as plain text."
+        "Related events, evidence with provenance, agent runs, verdict and report. Chat arrives "
+        "in Phase 6. Log values are shown as plain text."
     )
     investigations = ctx.investigations.repo.list()
     if not investigations:
@@ -64,16 +65,18 @@ def _render_investigation(ctx: AppContext, inv: Investigation) -> None:
     st.write("**Objective**")
     st.text(inv.objective)
 
-    tabs = st.tabs(["Timeline", "Evidence", "Expand and look up", "Verdict", "Report"])
+    tabs = st.tabs(["Timeline", "Evidence", "Agents", "Expand and look up", "Verdict", "Report"])
     with tabs[0]:
         _render_timeline(timeline)
     with tabs[1]:
         _render_evidence(ctx, inv, evidence, timeline, is_open)
     with tabs[2]:
-        _render_expand(ctx, inv, timeline, is_open)
+        agents_panel.render(ctx, inv)
     with tabs[3]:
-        _render_verdict(ctx, inv, evidence, is_open)
+        _render_expand(ctx, inv, timeline, is_open)
     with tabs[4]:
+        _render_verdict(ctx, inv, evidence, is_open)
+    with tabs[5]:
         _render_report(ctx, inv)
 
 

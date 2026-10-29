@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     investigation_window_minutes: int = Field(default=30, gt=0, le=24 * 60)
     investigation_max_scope_events: int = Field(default=500, gt=0, le=5_000)
 
+    # Agents: hard limits enforced by code, whatever the model asks for.
+    agent_model_timeout_seconds: float = Field(default=120.0, gt=0, le=900)
+    agent_context_tokens: int = Field(default=16_384, ge=2_048, le=131_072)
+    agent_max_model_calls: int = Field(default=40, gt=0, le=500)
+    agent_max_tool_calls: int = Field(default=30, gt=0, le=500)
+    agent_max_steps_per_turn: int = Field(default=6, gt=0, le=50)
+    agent_max_specialist_turns: int = Field(default=4, gt=0, le=20)
+    agent_max_run_seconds: int = Field(default=900, gt=0, le=3_600)
+    agent_max_invalid_outputs: int = Field(default=3, gt=0, le=10)
+
     database_path: Path = PROJECT_ROOT / "data" / "agentic_soc.db"
 
     app_host: str = "127.0.0.1"

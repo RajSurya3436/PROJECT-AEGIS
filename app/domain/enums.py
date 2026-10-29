@@ -127,3 +127,29 @@ class EvidenceSource(StrEnum):
     REPUTATION = "reputation"
     COVERAGE_CHECK = "coverage_check"
     ANALYST = "analyst"
+    AGENT = "agent"  # written by an agent through the add_evidence tool
+
+
+class AgentRole(StrEnum):
+    """One local model serves every role; only the prompt and the allowed tools differ."""
+
+    ORCHESTRATOR = "orchestrator"
+    LOG_INVESTIGATOR = "log_investigator"
+    THREAT_INTEL = "threat_intel"
+    VERIFIER = "verifier"
+
+
+SPECIALISTS: tuple[AgentRole, ...] = (AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL)
+
+
+class AgentRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"  # the verifier produced an assessment
+    STOPPED = "stopped"  # an analyst asked it to stop
+    LIMIT_REACHED = "limit_reached"  # a step, tool-call or time limit ended it early
+    FAILED = "failed"  # model unavailable or repeatedly invalid output
+    INTERRUPTED = "interrupted"  # the process ended mid-run; resumable from its checkpoint
+
+
+ACTIVE_RUN_STATUSES = frozenset({AgentRunStatus.QUEUED, AgentRunStatus.RUNNING})

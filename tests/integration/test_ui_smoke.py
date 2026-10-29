@@ -143,3 +143,38 @@ def test_verdict_form_shows_validation_error(ctx):
     next(b for b in at.button if b.label == "Close investigation").click().run()
     assert not at.exception
     assert any("explain" in e.value for e in at.error)
+
+
+def test_agents_tab_runs_agents_and_accepts_the_assessment(settings):
+    from fixtures.agents import ScriptedModel, route, verdict
+
+    holder = {}
+    ctx = build_context(settings, ":memory:", model_factory=lambda _s: holder["model"])
+    load_demo_iocs(ctx.iocs)
+    ingest_demo(ctx.ingestion)
+    alert = next(a for a in ctx.alerts.list() if a.rule_id == "auth.failures_then_success")
+    inv = ctx.investigations.start_from_alert(alert.alert_id)
+    alert_ev = next(
+        e.evidence_id
+        for e in ctx.investigations.evidence(inv.investigation_id)
+        if e.source_type.value == "alert"
+    )
+    holder["model"] = ScriptedModel(
+        [route("verifier"), verdict("likely_malicious", "medium", supporting=[alert_ev])]
+    )
+    at = _run(investigations.render, ctx)
+    assert any("AI unavailable" in w.value for w in at.warning)  # no Ollama in tests
+    next(b for b in at.button if b.label == "Run agents").click().run()
+    assert not at.exception
+    assert any(
+        m.label == "Proposed disposition" and m.value == "likely_malicious" for m in at.metric
+    )
+    next(
+        b for b in at.button if b.label == "Close investigation with this assessment"
+    ).click().run()
+    assert not at.exception
+    assert ctx.investigations.get(inv.investigation_id).disposition.value == "likely_malicious"
+
+    at = _run(dashboard.render, ctx)
+    assert not at.exception
+    assert any(m.label == "Completed runs" and m.value == "1" for m in at.metric)

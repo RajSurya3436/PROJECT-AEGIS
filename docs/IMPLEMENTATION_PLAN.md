@@ -29,7 +29,10 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] **4 Investigations**: lifecycle (open, close with disposition, reopen), event
   scope with related-event collection, evidence with provenance, timeline, coverage
   (missing telemetry) checks, deterministic Markdown/JSON reports, Investigations page
-- [ ] 5 Agent graph (LangGraph or tested state machine), prompts, tool contracts, limits
+- [x] **5 Agent graph**: tested state machine (ADR 0002), orchestrator / log investigator /
+  threat intel / verifier prompts, ten allowlisted tools with strict argument schemas, structured
+  outputs, citation checks, verifier adjustments, step/tool/time limits, checkpoints with
+  resume and stop, Agents tab (see `docs/agents.md`)
 - [ ] 6 Analyst chat, pause/resume/stop/redirect, state locking
 - [ ] 7 Response policy, simulation, audit, Markdown/JSON export
 - [ ] 8 Optional file tail + loopback HTTP receiver
@@ -45,13 +48,14 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] Deterministic alerts with event links (same dataset gives the same 5 alerts, tested)
 - [x] Detection without Ollama
 - [x] Provider adapters, mocked tests (no network or keys needed; a guard fails any real call)
-- [x] Investigation, evidence provenance (deterministic; agents add to it from Phase 5)
-- [ ] Agents with real allowlisted tools
+- [x] Investigation, evidence provenance (agents add to it through `add_evidence`)
+- [x] Agents with real allowlisted tools (tested with a scripted model; real `qwen3:8b` not yet tried)
 - [ ] Chat / redirect / pause / resume / stop
-- [ ] Verifier with inconclusive outcome
+- [x] Verifier with inconclusive outcome (deterministic downgrades when evidence cannot carry a verdict)
 - [ ] Policy: simulation only
 - [~] Audit log, Markdown/JSON reports (reports done; audit log is Phase 7)
-- [ ] Prompt injection does not override policy (data is stored verbatim; agent-side checks are Phase 5)
+- [x] Prompt injection does not override policy (fenced data, allowlist, citation and verdict
+  checks; tested with a model that obeys injected text)
 - [~] README: privacy, keys, provider limits, troubleshooting (present; demo steps pending)
 
 ## Phase 1 design notes
@@ -120,3 +124,24 @@ phase; each phase ends with tests + lint and a review before the next starts.
   Recommendations and simulated actions are placeholders until Phase 7.
 - Not done on purpose: linking several alerts to one investigation from the UI (the data model
   supports it), per-investigation locking (Phase 6), audit trail (Phase 7).
+
+## Phase 5 design notes
+
+- `app/agents/`: `llm.py` (ChatModel protocol, loopback-only Ollama client), `schemas.py`
+  (strict output models), `tools.py` (allowlist, role map, argument models, handlers),
+  `prompts.py` (role prompts, DATA fencing), `graph.py` (state machine, limits, verifier
+  checks), `service.py` (create/execute/resume, background runner).
+- The model only names a tool and gives JSON arguments; code validates and runs it. Refusals go
+  back to the model as tool results. Invalid replies are retried with the error message.
+- Citable events are those a tool returned in this run, tracked in the checkpoint. Citing one
+  brings it into the scope (`InvestigationService.add_to_scope`) before the Phase 4 rules run.
+- `check_reputation` gained a `providers` argument so each provider tool looks up only itself.
+- One model call is always kept for the verifier; tool and turn limits also route to it, so most
+  limit hits still end with an assessment. Only the time limit and the model call limit end a
+  run without one.
+- The verifier's assessment is stored on the run, never applied automatically. "Close
+  investigation with this assessment" calls the normal `close()`.
+- Tests use `tests/fixtures/agents.py` (scripted model); `tests/conftest.py` makes any real
+  Ollama call fail.
+- To do once `qwen3:8b` is pulled: run the demo investigation end to end, check that replies
+  validate (format-constrained JSON with thinking off), and tune the prompts and limits.

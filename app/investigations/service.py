@@ -203,6 +203,28 @@ class InvestigationService:
         new_ids = [e.event_id for e in matches if e.event_id not in in_scope][:room]
         return self.repo.add_scope(investigation_id, new_ids, reason, actor)
 
+    def add_to_scope(
+        self, investigation_id: str, event_ids: list[str], reason: str, actor: str
+    ) -> int:
+        """Bring specific stored events into the scope (e.g. events an agent's search returned
+        and now cites). Unknown IDs are rejected; the scope cap still applies."""
+        self._require_open(investigation_id)
+        wanted = list(dict.fromkeys(event_ids))
+        found = {e.event_id for e in self.events.get_many(wanted)}
+        unknown = [e for e in wanted if e not in found]
+        if unknown:
+            raise InvestigationError(f"unknown event(s): {', '.join(unknown)}")
+        in_scope = self.repo.scope_ids(investigation_id)
+        new_ids = [e for e in wanted if e not in in_scope]
+        room = self.settings.investigation_max_scope_events - len(in_scope)
+        if len(new_ids) > room:
+            raise InvestigationError(
+                f"scope is at its {self.settings.investigation_max_scope_events}-event cap"
+            )
+        added = self.repo.add_scope(investigation_id, new_ids, reason.strip()[:300], actor)
+        self.repo.touch(investigation_id)
+        return added
+
     def scope_events(self, investigation_id: str) -> list[NormalizedEvent]:
         return self.events.get_many(sorted(self.repo.scope_ids(investigation_id)))
 
@@ -264,15 +286,22 @@ class InvestigationService:
     def evidence(self, investigation_id: str) -> list[Evidence]:
         return self.repo.evidence(investigation_id)
 
-    def check_reputation(self, investigation_id: str, ip: str, actor: str) -> list[Evidence]:
+    def check_reputation(
+        self,
+        investigation_id: str,
+        ip: str,
+        actor: str,
+        providers: list[str] | None = None,
+    ) -> list[Evidence]:
         """Look up an IP that appears in the scope and record each outcome as evidence:
-        provider data as observations, unavailable providers as missing telemetry."""
+        provider data as observations, unavailable providers as missing telemetry.
+        ``providers`` limits the lookup (default: all configured adapters)."""
         self._require_open(investigation_id)
         citing = [e for e in self.scope_events(investigation_id) if ip in (e.src_ip, e.dst_ip)]
         if not citing:
             raise InvestigationError(f"{ip} does not appear in this investigation's events")
         event_ids = [e.event_id for e in citing][:MAX_CITED_EVENTS]
-        report = self.reputation.lookup_ip(ip)
+        report = self.reputation.lookup_ip(ip, providers)
         added: list[Evidence] = []
         if report.local_ioc is not None:
             added.append(self._ioc_evidence(investigation_id, ip, event_ids, actor))

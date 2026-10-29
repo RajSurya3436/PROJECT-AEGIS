@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.agents.service import AgentRunner, AgentService, ModelFactory, ollama_model
 from app.config import Settings, get_settings
 from app.detection.engine import DetectionEngine
 from app.ingestion.iocs import load_demo_iocs
 from app.ingestion.replay import ReplayEngine, ReplayRunner, build_plan
 from app.ingestion.service import IngestionService
 from app.investigations.service import InvestigationService
+from app.storage.agents import AgentRunRepository
 from app.storage.alerts import AlertRepository, IocRepository
 from app.storage.db import open_database
 from app.storage.repositories import DataSourceRepository, EventRepository, ParseErrorRepository
@@ -31,7 +34,9 @@ class AppContext:
     iocs: IocRepository
     reputation: ReputationService
     investigations: InvestigationService
+    agents: AgentService
     replay: ReplayRunner | None  # None for in-memory databases (a thread needs its own connection)
+    agent_runner: AgentRunner | None  # None for in-memory databases; runs execute inline
 
 
 def build_ingestion(
@@ -46,11 +51,25 @@ def build_context(
     settings: Settings | None = None,
     database: str | None = None,
     reputation_transport: Transport = urllib_transport,
+    model_factory: ModelFactory = ollama_model,
 ) -> AppContext:
     settings = settings or get_settings()
     database = database or str(settings.database_path)
     conn = open_database(database)
     ingestion, detection = build_ingestion(conn, settings)
+
+    def build_services(
+        conn: sqlite3.Connection, detection: DetectionEngine
+    ) -> tuple[ReputationService, InvestigationService, AgentService]:
+        reputation = ReputationService(
+            conn, settings, build_providers(settings, reputation_transport)
+        )
+        investigations = InvestigationService(conn, settings, detection, reputation)
+        return (
+            reputation,
+            investigations,
+            AgentService(conn, settings, investigations, model_factory),
+        )
 
     def new_replay_engine() -> ReplayEngine:
         replay_conn = open_database(database)
@@ -62,7 +81,16 @@ def build_context(
             close=replay_conn.close,
         )
 
-    reputation = ReputationService(conn, settings, build_providers(settings, reputation_transport))
+    def new_agent_session() -> tuple[AgentService, Callable[[], None]]:
+        agent_conn = open_database(database)
+        return build_services(agent_conn, DetectionEngine(agent_conn))[2], agent_conn.close
+
+    reputation, investigations, agents = build_services(conn, detection)
+    agent_runner = None
+    if database != ":memory:":
+        # Runs marked active by an earlier process are not running any more.
+        AgentRunRepository(conn).mark_interrupted()
+        agent_runner = AgentRunner(new_agent_session)
     return AppContext(
         settings=settings,
         conn=conn,
@@ -74,6 +102,8 @@ def build_context(
         alerts=AlertRepository(conn),
         iocs=IocRepository(conn),
         reputation=reputation,
-        investigations=InvestigationService(conn, settings, detection, reputation),
+        investigations=investigations,
+        agents=agents,
         replay=None if database == ":memory:" else ReplayRunner(new_replay_engine),
+        agent_runner=agent_runner,
     )
