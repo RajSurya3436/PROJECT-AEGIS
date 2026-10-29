@@ -89,9 +89,9 @@ def _render_run(ctx: AppContext, inv: Investigation, run: AgentRun, is_open: boo
         question = run.checkpoint.get("waiting_question", "")
         st.info(f"Waiting for your reply (answer in the **Chat** tab): {question}")
     inv_id = inv.investigation_id
-    controllable = is_open and (
-        run.status in OPEN_RUN_STATUSES or run.status is AgentRunStatus.INTERRUPTED
-    )
+    target = ctx.chat.controlled_run(inv_id) if is_open else None
+    # Only the run the buttons would act on gets them (not an older run picked in the list).
+    controllable = target is not None and target.run_id == run.run_id
     if controllable:
         c1, c2, c3 = st.columns(3)
         executing = run.status in ACTIVE_RUN_STATUSES

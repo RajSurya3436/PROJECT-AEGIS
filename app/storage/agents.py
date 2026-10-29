@@ -23,6 +23,7 @@ CONTROLS = ("pause", "stop")
 _ACTIVE = tuple(sorted(s.value for s in ACTIVE_RUN_STATUSES))
 _OPEN = tuple(sorted(s.value for s in OPEN_RUN_STATUSES))
 RESUMABLE = tuple(sorted(s.value for s in RESUMABLE_RUN_STATUSES))
+_UNFINISHED = tuple(sorted(s.value for s in OPEN_RUN_STATUSES | RESUMABLE_RUN_STATUSES))
 
 
 def _dt(value: str | None) -> datetime | None:
@@ -99,11 +100,12 @@ class AgentRunRepository:
         )
 
     def claim(self, run_id: str) -> bool:
-        """Move a resumable run (queued, paused, waiting, interrupted) to running and clear
-        any old control request. False if it is in another state, or if a different run of
-        the same investigation is open."""
+        """Move a resumable run (queued, paused, waiting, interrupted) to running. False if
+        it is in another state, or if a different run of the same investigation is open. A
+        pause or stop requested while the run was still queued is kept, so the worker honours
+        it before its first step (``finish`` and ``mark_interrupted`` clear old requests)."""
         cur = self.conn.execute(
-            "UPDATE agent_runs SET status = ?, control = NULL, error = NULL, finished_at = NULL,"  # noqa: S608
+            "UPDATE agent_runs SET status = ?, error = NULL, finished_at = NULL,"  # noqa: S608
             f" updated_at = ? WHERE run_id = ? AND status IN {_marks(RESUMABLE)}"
             " AND NOT EXISTS (SELECT 1 FROM agent_runs other"
             " WHERE other.investigation_id = agent_runs.investigation_id"
@@ -164,6 +166,17 @@ class AgentRunRepository:
                 run_id,
             ),
         )
+
+    def stop_unfinished(self, run_id: str, error: str) -> bool:
+        """Mark a run stopped only if it has not finished in the meantime, so a stop that
+        races a completing worker never overwrites its assessment."""
+        now = utc_now_iso()
+        cur = self.conn.execute(
+            "UPDATE agent_runs SET status = ?, error = ?, control = NULL, updated_at = ?,"  # noqa: S608
+            f" finished_at = ? WHERE run_id = ? AND status IN {_marks(_UNFINISHED)}",
+            (AgentRunStatus.STOPPED.value, error, now, now, run_id, *_UNFINISHED),
+        )
+        return cur.rowcount == 1
 
     def mark_interrupted(self) -> int:
         """Runs left executing by an earlier process cannot still be running. Mark them

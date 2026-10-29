@@ -109,13 +109,23 @@ their question, finished with the assessment). All text is shown as plain text.
   on.
 - **Control**: Pause, Resume, Stop, and Redirect (same as Investigate, logged as a redirect).
 
-How directives act (`AgentGraph._apply`): the current specialist turn ends with a note, the work
-goes to the chosen specialist (or back to the orchestrator, which is told to act on the latest
-analyst message first), and the analyst's words appear in every later prompt under *ANALYST
-MESSAGES*, outside the DATA fences. Each directive grants one extra specialist turn, so a
-redirect is honoured even after the turn limit. Nothing is deleted: evidence, notes and the
-step log stay. An instruction that arrives after the verifier has already started stays
-pending and is read first by the next run (the chat says so).
+How directives act (`AgentGraph._receive` and `_route_queued`): new instructions cut the
+current specialist turn short (once per batch; a turn that had not taken a step yet is dropped
+without using up a turn) and join a queue. Each time the work is back with the orchestrator,
+the oldest queued instruction is routed: to the chosen specialist, to the verifier, or to the
+orchestrator, which is told to act on the latest analyst message first. So several instructions
+sent together are carried out in order. The analyst's words appear in every later prompt under
+*ANALYST MESSAGES*, outside the DATA fences. An instruction for a specialist or the
+orchestrator grants one extra specialist turn (at most `AGENT_MAX_SPECIALIST_TURNS` extra in
+total), so a redirect is honoured even after the turn limit. Nothing is deleted: evidence,
+notes and the step log stay.
+
+An instruction that arrives after the verifier has started cannot change that assessment; when
+the run completes, a **follow-up run** starts automatically and reads it first (the chat says
+so). A reply that arrives while a worker is returning, or a Resume pressed while it is still
+winding down, is picked up by the same worker rather than lost. Stopping a run discards its
+pending instructions; a stop that races a run finishing on its own leaves the finished result
+as it is.
 
 Analyst messages direct the work but cannot lift the rules: tools, roles, citation checks and
 verifier adjustments apply to them like to anything else.

@@ -217,3 +217,27 @@ def test_chat_tab_ask_investigate_and_control(settings):
     at.radio(key=f"chat-mode-{inv}").set_value("Control").run()
     next(b for b in at.button if b.label == "Pause").click().run()
     assert any("no running agent run to pause" in e.value for e in at.error)
+
+
+def test_agents_tab_controls_only_the_run_they_act_on(settings):
+    from app.domain.enums import AgentRunStatus
+
+    ctx = build_context(settings, ":memory:")
+    load_demo_iocs(ctx.iocs)
+    ingest_demo(ctx.ingestion)
+    alert = next(a for a in ctx.alerts.list() if a.rule_id == "auth.failures_then_success")
+    inv = ctx.investigations.start_from_alert(alert.alert_id).investigation_id
+    old = ctx.agents.create_run(inv)
+    ctx.agents.runs.claim(old.run_id)
+    ctx.agents.runs.mark_interrupted()
+    current = ctx.agents.create_run(inv)
+    ctx.agents.runs.set_status(current.run_id, AgentRunStatus.PAUSED)
+
+    at = _run(investigations.render, ctx)
+    assert any(b.label == "Stop run" for b in at.button)  # the open, paused run
+    picker = next(s for s in at.selectbox if s.label == "Run")
+    picker.select(old.run_id).run()
+    assert not at.exception
+    assert not any(
+        b.label in ("Stop run", "Pause run", "Resume from checkpoint") for b in at.button
+    )

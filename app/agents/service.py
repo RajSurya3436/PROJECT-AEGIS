@@ -115,12 +115,35 @@ class AgentService:
             self.runs.finish(run_id, outcome.status, outcome.assessment, outcome.error)
             run = self.get(run_id)
             self._announce(run, state)
-            # A reply that arrived while this worker was returning would otherwise sit
-            # unread until the analyst touched the run again.
-            if run.status is not AgentRunStatus.WAITING or not self.chat.pending(
-                run.investigation_id
-            ):
-                return run
+            pending = self.chat.pending(run.investigation_id)
+            if run.status is AgentRunStatus.WAITING and pending:
+                continue  # a reply arrived while this worker was returning
+            if run.status is AgentRunStatus.STOPPED:
+                self.chat.discard_pending(run.investigation_id)  # abandoned with the run
+            if run.status is AgentRunStatus.COMPLETED and pending:
+                follow_up = self._follow_up(run)
+                if follow_up is not None:
+                    run_id, run = follow_up.run_id, follow_up
+                    continue
+            return run
+
+    def _follow_up(self, run: AgentRun) -> AgentRun | None:
+        """Instructions that arrived after the verifier started are not lost: a new run
+        starts and reads them first."""
+        try:
+            follow_up = self.create_run(run.investigation_id)
+        except InvestigationError:
+            return None  # closed meanwhile, or another run already holds the case
+        self.chat.add(
+            run.investigation_id,
+            author=SYSTEM,
+            mode=ChatMode.CONTROL,
+            kind=ChatKind.NOTICE,
+            content=f"Started follow-up run {follow_up.run_id} for instructions that arrived "
+            f"after {run.run_id} began its assessment.",
+            run_id=follow_up.run_id,
+        )
+        return follow_up
 
     def _run_graph(self, run: AgentRun, state: RunState) -> RunOutcome:
         controls = DbControls(self.runs, self.chat, run.run_id, run.investigation_id)
@@ -191,6 +214,7 @@ class AgentRunner:
         self._factory = session_factory
         self._lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
+        self._again: set[str] = set()  # launched while its worker was still winding down
 
     def start(self, service: AgentService, investigation_id: str) -> str:
         run = service.create_run(investigation_id)
@@ -201,7 +225,10 @@ class AgentRunner:
         with self._lock:
             existing = self._threads.get(run_id)
             if existing is not None and existing.is_alive():
-                return  # already executing; it will read new directives at its next step
+                # Executing runs read new directives at their next step; one that is just
+                # ending (e.g. paused) is executed again by the same worker.
+                self._again.add(run_id)
+                return
             thread = threading.Thread(
                 target=self._work, args=(run_id,), name=f"agents-{run_id}", daemon=True
             )
@@ -222,8 +249,18 @@ class AgentRunner:
     def _work(self, run_id: str) -> None:
         service, close = self._factory()
         try:
-            service.execute(run_id)
-        except Exception:
-            logger.exception("agent run %s could not start", run_id)
+            while True:
+                try:
+                    service.execute(run_id)
+                except InvestigationError:
+                    pass  # not resumable any more (finished, or another run holds the case)
+                except Exception:
+                    logger.exception("agent run %s could not start", run_id)
+                with self._lock:
+                    if run_id not in self._again:
+                        # Leaving: forget the thread so a later launch starts a new one.
+                        self._threads.pop(run_id, None)
+                        return
+                    self._again.discard(run_id)
         finally:
             close()

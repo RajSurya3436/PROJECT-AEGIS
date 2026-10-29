@@ -151,7 +151,7 @@ class ChatService:
 
     def resume(self, investigation_id: str) -> ChatEntry:
         self._require_open(investigation_id)
-        run = self.open_run(investigation_id) or self._last_interrupted(investigation_id)
+        run = self.controlled_run(investigation_id)
         if run is None:
             raise InvestigationError("nothing to resume; start a run with Investigate")
         if run.status is AgentRunStatus.RUNNING:
@@ -165,7 +165,7 @@ class ChatService:
         return message
 
     def stop(self, investigation_id: str) -> ChatEntry:
-        run = self.open_run(investigation_id) or self._last_interrupted(investigation_id)
+        run = self.controlled_run(investigation_id)
         if run is None:
             raise InvestigationError("no agent run to stop")
         message = self._control_message(investigation_id, ChatKind.STOP, "Stop", run)
@@ -181,10 +181,11 @@ class ChatService:
 
     def _end(self, run: AgentRun, reason: str) -> None:
         if run.status in ACTIVE_RUN_STATUSES and self.runs.request_control(run.run_id, "stop"):
-            return  # the worker stops at its next step and announces it
-        self.runs.finish(run.run_id, AgentRunStatus.STOPPED, None, reason)
+            return  # the worker stops at its next step, drops pending work and announces it
         self.chat.discard_pending(run.investigation_id)
-        self._note(run.investigation_id, f"Run stopped: {reason}.", run.run_id)
+        if self.runs.stop_unfinished(run.run_id, reason):
+            self._note(run.investigation_id, f"Run stopped: {reason}.", run.run_id)
+        # else it finished on its own a moment ago; its result stands
 
     def _executing(self, investigation_id: str, action: str) -> AgentRun:
         run = self.open_run(investigation_id)
@@ -192,7 +193,12 @@ class ChatService:
             raise InvestigationError(f"no running agent run to {action}")
         return run
 
-    def _last_interrupted(self, investigation_id: str) -> AgentRun | None:
+    def controlled_run(self, investigation_id: str) -> AgentRun | None:
+        """The run Pause, Resume and Stop act on: the open run, else the latest run if it
+        was interrupted."""
+        run = self.open_run(investigation_id)
+        if run is not None:
+            return run
         runs = self.runs.for_investigation(investigation_id, limit=1)
         return runs[0] if runs and runs[0].status is AgentRunStatus.INTERRUPTED else None
 
@@ -260,6 +266,7 @@ class ChatService:
         specs = [] if role is AgentRole.VERIFIER else tools_for(role, read_only=True)
         system = prompts.ask_prompt(role.value, prompts.tool_catalogue(specs))
         steps: list[dict[str, Any]] = []
+        seen: list[str] = []  # everything the model was shown, for the reference check
         calls, invalid, rejection = 0, 0, ""
         max_steps = settings.agent_max_ask_steps
         while calls < max_steps + settings.agent_max_invalid_outputs:
@@ -274,6 +281,7 @@ class ChatService:
                 else "",
             ]
             calls += 1
+            seen.append(parts[0])
             text = model.complete(
                 [
                     ChatMessage("system", system),
@@ -297,8 +305,9 @@ class ChatService:
                         f"I could not finish looking within {max_steps} steps. "
                         f"{action.rationale}".strip()
                     )
-                return self._checked(investigation_id, answer, steps, calls)
+                return self._checked(investigation_id, answer, steps, calls, seen)
             outcome = execute(ctx, action.tool, action.arguments)
+            seen.append(outcome.as_text())
             steps.append(
                 {
                     "tool": action.tool,
@@ -311,14 +320,22 @@ class ChatService:
         raise InvalidOutputError("too many unusable replies")
 
     def _checked(
-        self, investigation_id: str, answer: str, steps: list[dict[str, Any]], calls: int
+        self,
+        investigation_id: str,
+        answer: str,
+        steps: list[dict[str, Any]],
+        calls: int,
+        seen: list[str],
     ) -> tuple[str, dict[str, Any]]:
-        """Flag IDs in the answer that do not exist, so a made-up citation is visible."""
+        """Flag IDs in the answer that do not exist, so a made-up citation is visible. A
+        32-hex string that is not an event ID but appeared in the data the model was shown
+        (an MD5 from a command line, say) is quoted data, not a citation."""
         evidence = {e.evidence_id for e in self.investigations.evidence(investigation_id)}
         unknown = [i for i in dict.fromkeys(EVIDENCE_REF.findall(answer)) if i not in evidence]
         events = list(dict.fromkeys(EVENT_REF.findall(answer)))
         found = {e.event_id for e in self.investigations.events.get_many(events)}
-        unknown += [i for i in events if i not in found]
+        shown = "\n".join(seen).lower()
+        unknown += [i for i in events if i not in found and i not in shown]
         if unknown:
             answer += f"\n\n[Unverified references, not found in the data: {', '.join(unknown)}]"
         payload = {

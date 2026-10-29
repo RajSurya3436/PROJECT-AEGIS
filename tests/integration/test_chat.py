@@ -14,10 +14,12 @@ from app.domain.enums import (
     Confidence,
     Disposition,
     EvidenceSource,
+    InputFormat,
 )
 from app.domain.errors import InvestigationError
 from app.ingestion.demo import ingest_demo
 from app.ingestion.iocs import load_demo_iocs
+from app.ingestion.upload import ingest_upload
 from app.storage.repositories import EventFilters
 
 RULE = "auth.failures_then_success"
@@ -318,21 +320,25 @@ def test_closing_the_case_stops_a_parked_run_and_drops_pending_instructions(demo
     assert demo.chat.messages(inv)[-2].status == "discarded"
 
 
-def test_instruction_that_arrives_too_late_waits_for_the_next_run(demo, holder, inv):
+def test_instruction_that_arrives_during_the_assessment_gets_a_follow_up_run(demo, holder, inv):
     def late(_messages):
         demo.chat.investigate(inv, "also check the DNS traffic")
         return verdict()
 
-    _script(holder, route("verifier"), late)
-    run = demo.chat.start(inv)
-    assert run.status is AgentRunStatus.COMPLETED
-    (pending,) = demo.chat.pending(inv)
-    assert pending.content == "also check the DNS traffic"
-
-    model = _script(holder, route("log_investigator"), finish(), route("verifier"), verdict())
-    demo.chat.start(inv)
-    assert "also check the DNS traffic" in model.user_prompt(0)
+    holder.model = ScriptedModel(
+        [route("verifier"), late, route("log_investigator"), finish(), route("verifier"), verdict()]
+    )
+    first = demo.chat.start(inv)
+    assert first.status is AgentRunStatus.COMPLETED
+    runs = demo.agents.runs.for_investigation(inv)
+    assert len(runs) == 2
+    follow_up = next(r for r in runs if r.run_id != first.run_id)
+    assert follow_up.status is AgentRunStatus.COMPLETED
+    assert "also check the DNS traffic" in holder.model.user_prompt(2)
     assert not demo.chat.pending(inv)
+    assert any(
+        f"Started follow-up run {follow_up.run_id}" in m.content for m in demo.chat.messages(inv)
+    )
 
 
 def test_only_specialists_can_be_chosen(demo, holder, inv):
@@ -370,3 +376,138 @@ def test_background_chat_run_and_restart_keeps_parked_runs(tmp_path, holder):
     again.chat.investigate(inv, "yes")
     again.agent_runner.join(run.run_id, timeout=30)
     assert again.agents.get(run.run_id).status is AgentRunStatus.COMPLETED
+
+
+# --- review fixes -------------------------------------------------------------------------
+
+
+def test_stop_or_pause_requested_while_queued_is_honoured(demo, holder, inv):
+    holder.model = ScriptedModel([])  # any model call would fail the test
+    run = demo.agents.create_run(inv)
+    demo.chat.stop(inv)  # the worker has not claimed the run yet
+    run = demo.agents.execute(run.run_id)
+    assert run.status is AgentRunStatus.STOPPED and run.model_calls == 0
+
+    run = demo.agents.create_run(inv)
+    demo.chat.pause(inv)
+    assert demo.agents.execute(run.run_id).status is AgentRunStatus.PAUSED
+
+
+def test_a_late_stop_does_not_overwrite_a_finished_run(demo, holder, inv):
+    stale = demo.agents.create_run(inv)  # what the UI still shows: queued
+    _script(holder, route("verifier"), verdict())
+    done = demo.agents.execute(stale.run_id)
+    assert done.status is AgentRunStatus.COMPLETED
+    demo.chat._end(stale, "stopped by the analyst")  # the click that lost the race
+    after = demo.agents.get(stale.run_id)
+    assert after.status is AgentRunStatus.COMPLETED and after.assessment is not None
+    assert not any(m.content.startswith("Run stopped") for m in demo.chat.messages(inv))
+
+
+def test_stopping_a_running_run_drops_its_pending_instructions(demo, holder, inv):
+    def queue_then_stop(_messages):
+        demo.chat.investigate(inv, "look at the DNS traffic")  # pending: the run is running
+        demo.chat.stop(inv)
+        return route("log_investigator")
+
+    _script(holder, queue_then_stop)
+    run = demo.chat.start(inv)
+    assert run.status is AgentRunStatus.STOPPED
+    assert not demo.chat.pending(inv)
+    instruction = next(m for m in demo.chat.messages(inv) if m.kind is ChatKind.INSTRUCTION)
+    assert instruction.status == "discarded"
+
+
+def test_instructions_sent_together_are_carried_out_in_order(demo, holder, inv):
+    def two_instructions(_messages):
+        demo.chat.redirect(inv, "check user dave", AgentRole.LOG_INVESTIGATOR)
+        demo.chat.redirect(inv, "check 203.0.113.45", AgentRole.THREAT_INTEL)
+        return call("build_timeline")
+
+    model = _script(
+        holder,
+        route("log_investigator"),
+        two_instructions,
+        finish("dave checked"),
+        finish("ip checked"),
+        route("verifier"),
+        verdict(),
+    )
+    run = demo.chat.start(inv)
+    assert run.status is AgentRunStatus.COMPLETED
+    assert [n["summary"] for n in run.checkpoint["notes"]] == [
+        "turn ended: redirected by the analyst",
+        "dave checked",
+        "ip checked",
+    ]
+    assert "check user dave" in model.user_prompt(2) and "log investigator" in model.system_prompt(
+        2
+    )
+    assert "threat intelligence analyst" in model.system_prompt(3)
+    assert run.checkpoint["specialist_turns"] == 3 and run.checkpoint["queued"] == []
+
+
+def test_redirecting_a_turn_that_had_not_started_does_not_use_a_turn(demo, holder, inv):
+    def redirect_while_routing(_messages):
+        demo.chat.redirect(inv, "check the IOC hits", AgentRole.THREAT_INTEL)
+        return route("log_investigator")
+
+    _script(holder, redirect_while_routing, finish("ioc done"), route("verifier"), verdict())
+    run = demo.chat.start(inv)
+    assert [n["summary"] for n in run.checkpoint["notes"]] == ["ioc done"]
+    assert run.checkpoint["specialist_turns"] == 1
+
+
+def test_bonus_turns_are_capped_and_not_granted_for_the_verifier(demo, holder, inv):
+    demo.agents.settings = Settings(_env_file=None, agent_max_specialist_turns=1)
+
+    def three(_messages):
+        for _ in range(3):
+            demo.chat.redirect(inv, "again", AgentRole.LOG_INVESTIGATOR)
+        return finish("first")
+
+    _script(
+        holder,
+        route("log_investigator"),
+        three,
+        finish("1"),
+        finish("2"),
+        finish("3"),
+        route("verifier"),
+        verdict(),
+    )
+    run = demo.chat.start(inv)
+    assert run.status is AgentRunStatus.COMPLETED
+    assert run.checkpoint["bonus_turns"] == 1  # capped at the configured turn limit
+
+    _script(holder, route("verifier"), verdict())
+    demo.chat.redirect(inv, "assess now", AgentRole.VERIFIER)
+    run = demo.agents.runs.for_investigation(inv)[0]
+    assert run.status is AgentRunStatus.COMPLETED and run.checkpoint["bonus_turns"] == 0
+
+
+def test_a_question_on_the_last_step_does_not_buy_an_extra_step(demo, holder, inv):
+    demo.agents.settings = Settings(_env_file=None, agent_max_steps_per_turn=1)
+    _script(holder, route("log_investigator"), call("request_analyst_input", question="VPN?"))
+    run = demo.chat.start(inv)
+    assert run.status is AgentRunStatus.WAITING
+    assert run.checkpoint["node"] == "orchestrate"  # the turn ended at its step limit
+    model = _script(holder, route("verifier"), verdict())
+    demo.chat.investigate(inv, "yes, VPN is expected")
+    assert "orchestrator" in model.system_prompt(0)
+    assert "yes, VPN is expected" in model.user_prompt(0)
+
+
+def test_hashes_quoted_from_the_data_are_not_flagged(demo, holder, inv):
+    md5 = "44d88612fea8a8f36de82e1278abb02f"
+    row = (
+        '{"timestamp": "2026-03-10T13:10:30Z", "event_type": "process", "host": "WS-DAVE04",'
+        f' "user": "dave", "process_name": "certutil.exe", "command_line": "certutil -hashfile'
+        f' x.exe MD5 => {md5}"}}\n'
+    )
+    ingest_upload(demo.ingestion, "hash.jsonl", row.encode(), InputFormat.JSONL)
+    (hashed,) = demo.events.query(EventFilters(equals={"process_name": "certutil.exe"}))
+    _script(holder, call("get_event", event_id=hashed.event_id), finish(f"certutil hashed {md5}."))
+    answer = demo.chat.ask(inv, "What did certutil do?")
+    assert answer.payload["unverified_references"] == []
+    assert "Unverified" not in answer.content
