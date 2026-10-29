@@ -49,7 +49,10 @@ Replay (`app/ingestion/replay.py`) feeds `IngestionService` like any other sourc
 | `app/storage/reputation.py` | reputation cache (all SQL); `AppSettingsRepository` in `repositories.py` holds the lookup switch |
 | `app/agents/` | model client, output schemas, tool allowlist, prompts, state machine, run service and background runner (see `docs/agents.md`) |
 | `app/storage/agents.py` | agent runs with checkpoints, step log (all SQL) |
-| `app/ui/agents_panel.py` | Agents tab: run, stop, resume, activity log, verifier assessment |
+| `app/ui/agents_panel.py` | Agents tab: run, pause, resume, stop, activity log, verifier assessment |
+| `app/agents/chat.py` | analyst chat: Ask (read-only), Investigate, Control; directives and run control |
+| `app/storage/chat.py` | chat messages and pending directives (all SQL) |
+| `app/ui/chat_panel.py` | Chat tab |
 
 ## Rules
 

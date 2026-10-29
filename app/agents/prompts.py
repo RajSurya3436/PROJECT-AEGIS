@@ -99,7 +99,40 @@ def data_block(label: str, value: Any) -> str:
     return f"{DATA_OPEN} {label}>>>\n{body}\n{DATA_CLOSE}"
 
 
+def analyst_block(messages: list[dict[str, str]]) -> str:
+    body = json.dumps(_neutralise(messages), indent=1, sort_keys=True)
+    return f"ANALYST MESSAGES (oldest first; the last one is the most recent):\n{body}"
+
+
+ASK = """\
+The analyst is asking you a question about this investigation ({role}). Answer it from the case
+file, using read-only tools if you need more detail. You cannot record evidence, contact
+threat-intel providers or change anything in Ask mode. Mention the event and evidence IDs your
+answer rests on, give the case for and against where it matters, and say plainly when the data
+does not answer the question.
+
+{policy}
+
+JSON reply, one step at a time:
+- to look something up: {{"action": "tool_call", "tool": "<name>", "arguments": {{...}},
+  "rationale": "..."}}
+- to answer: {{"action": "finish", "summary": "<your answer to the analyst>"}}"""
+
+ASK_ROLES = {
+    "log_investigator": "you are the log investigator",
+    "threat_intel": "you are the threat intelligence analyst",
+    "verifier": "you are the verifier: judge what the current evidence does and does not show",
+}
+
+
+def ask_prompt(role: str, catalogue: str) -> str:
+    prompt = ASK.format(role=ASK_ROLES[role], policy=POLICY)
+    return f"{prompt}\n\n{catalogue}" if catalogue else prompt
+
+
 def tool_catalogue(specs: list[ToolSpec]) -> str:
+    if not specs:
+        return ""
     lines = ["Tools you may call:"]
     for spec in specs:
         args = ", ".join(f"{k} ({v})" for k, v in spec.signature()["arguments"].items())

@@ -178,3 +178,42 @@ def test_agents_tab_runs_agents_and_accepts_the_assessment(settings):
     at = _run(dashboard.render, ctx)
     assert not at.exception
     assert any(m.label == "Completed runs" and m.value == "1" for m in at.metric)
+
+
+def test_chat_tab_ask_investigate_and_control(settings):
+    from fixtures.agents import ScriptedModel, call, finish, route, verdict
+
+    holder = {}
+    ctx = build_context(settings, ":memory:", model_factory=lambda _s: holder["model"])
+    load_demo_iocs(ctx.iocs)
+    ingest_demo(ctx.ingestion)
+    alert = next(a for a in ctx.alerts.list() if a.rule_id == "auth.failures_then_success")
+    inv = ctx.investigations.start_from_alert(alert.alert_id).investigation_id
+
+    at = _run(investigations.render, ctx)
+    assert any("No messages yet" in c.value for c in at.caption)
+    holder["model"] = ScriptedModel([finish("Twelve failures, then a success from the same IP.")])
+    at.text_area(key=f"ask-text-{inv}").input("What happened?")
+    next(b for b in at.button if b.label == "Ask").click().run()
+    assert not at.exception
+    assert any("Twelve failures" in t.value for t in at.text)
+
+    holder["model"] = ScriptedModel(
+        [route("log_investigator"), call("request_analyst_input", question="Is dave remote?")]
+    )
+    at.radio(key=f"chat-mode-{inv}").set_value("Investigate").run()
+    at.text_area(key=f"direct-text-False-{inv}").input("Find evidence for and against.")
+    next(b for b in at.button if b.label == "Send to the agents").click().run()
+    assert not at.exception
+    assert any("Agents: waiting" in i.value for i in at.warning)
+    assert any(b.label == "Reply to the agents" for b in at.button)
+
+    holder["model"] = ScriptedModel([finish("ok"), route("verifier"), verdict()])
+    at.text_area(key=f"direct-text-False-{inv}").input("Yes, he works remotely.")
+    next(b for b in at.button if b.label == "Reply to the agents").click().run()
+    assert not at.exception
+    assert ctx.agents.runs.for_investigation(inv)[0].status.value == "completed"
+
+    at.radio(key=f"chat-mode-{inv}").set_value("Control").run()
+    next(b for b in at.button if b.label == "Pause").click().run()
+    assert any("no running agent run to pause" in e.value for e in at.error)

@@ -4,8 +4,8 @@ A local-first SOC investigation app: ingest security events, run deterministic d
 (in later phases) investigate alerts with tool-using agents and an evidence-backed report.
 It is an investigation layer, **not** a SIEM replacement.
 
-**Status: Phases 0 to 5 complete (data foundation, replay, deterministic detection, IP
-reputation, investigations and reports, agent graph).** Working
+**Status: Phases 0 to 6 complete (data foundation, replay, deterministic detection, IP
+reputation, investigations and reports, agent graph, analyst chat).** Working
 today: JSONL/NDJSON/CSV/JSON import with field-mapping preview, UTC normalization, quarantine of
 malformed rows, a SQLite event store with search and related-event lookup, a bundled synthetic
 demo dataset with timed replay (speed, pause, resume, stop, restart), five versioned detection
@@ -16,7 +16,9 @@ Detection rules, Settings, Investigations). Investigations collect related event
 evidence with provenance, record a disposition, and export Markdown/JSON reports. Agents
 (orchestrator, log investigator, threat intel, verifier on one local model) work an
 investigation through allowlisted tools and propose an evidence-checked assessment that the
-analyst can accept. Not yet built: chat, response planning, audit log. See
+analyst can accept. The analyst chats with them: Ask (read-only questions), Investigate
+(instructions, replies to the agents' questions) and Control (pause, resume, stop, redirect).
+Not yet built: response planning, audit log. See
 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md), [docs/agents.md](docs/agents.md),
 [docs/detection-rules.md](docs/detection-rules.md) and [docs/reputation.md](docs/reputation.md).
 
@@ -34,7 +36,10 @@ copy .env.example .env        # optional; the app runs with no .env at all
 Then open **Data sources** and either **Load demo dataset** (instant) or use the replay controls
 (pick a speed, press Start) and watch **Alert queue** fill: the demo yields five alerts.
 Open an alert and press **Investigate**, then go to **Investigations** to see the timeline,
-evidence and gaps, add notes, record a verdict and download the report.
+evidence and gaps, add notes, record a verdict and download the report. With Ollama running,
+use the **Chat** tab to ask questions or direct the agents, for example *"Could this be
+legitimate? Find evidence for and against compromise."* then *"Search the same user's events
+for 30 minutes before and after."*
 `make install|test|lint|run` are equivalents if you have `make`.
 
 ```powershell
@@ -92,6 +97,10 @@ unavailable. Run limits (`AGENT_MAX_MODEL_CALLS` and others) are listed in
   times in a row; the step log on the **Agents** tab shows each rejected reply. Raise
   `AGENT_MODEL_TIMEOUT_SECONDS` if the errors are timeouts.
 - *Agent run shows "interrupted"*: the app stopped mid-run. Press **Resume from checkpoint**.
+- *Chat says the agents are "waiting"*: they asked you a question. Reply in **Investigate** mode;
+  the run carries on. **Stop** ends it instead.
+- *"An agent run is already open"*: a paused or waiting run still holds the investigation.
+  Resume, redirect or stop it from the chat.
 - *No IOC alert after uploading your own data*: load the IOC list first (the demo load does it),
   or press **Re-run detection** on the Detection rules page.
 - *Reputation shows "skipped" for demo IPs*: expected. The demo uses documentation ranges

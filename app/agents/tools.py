@@ -122,6 +122,8 @@ class ToolContext:
     model_name: str
     returned_event_ids: set[str] = field(default_factory=set)
     open_questions: list[str] = field(default_factory=list)
+    read_only: bool = False  # Ask mode: tools that write or contact providers are refused
+    waiting_question: str | None = None  # set by request_analyst_input: the run must wait
 
     @property
     def actor(self) -> str:
@@ -437,13 +439,19 @@ def _request_analyst_input(
         raise ToolRejected(f"at most {MAX_OPEN_QUESTIONS} questions per run")
     if args.question not in ctx.open_questions:
         ctx.open_questions.append(args.question)
+    ctx.waiting_question = args.question
     return {
         "recorded": True,
-        "note": "The analyst sees this question after the run. Continue with the data you have.",
-    }, "question recorded for the analyst"
+        "note": "The run pauses until the analyst answers in chat. Their reply will appear "
+        "under analyst messages; then continue your turn.",
+    }, "waiting for the analyst"
 
 
 _INVESTIGATORS = frozenset({AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL})
+# Tools that change state or send data out. Ask mode (read-only) cannot use them.
+WRITING_TOOLS = frozenset(
+    {"add_evidence", "request_analyst_input", "lookup_abuseipdb", "lookup_virustotal_ip"}
+)
 
 TOOLS: dict[str, ToolSpec] = {
     spec.name: spec
@@ -517,7 +525,8 @@ TOOLS: dict[str, ToolSpec] = {
         ),
         ToolSpec(
             "request_analyst_input",
-            "Ask the analyst a question; it is shown after the run (does not pause it).",
+            "Ask the analyst a question. The run waits for the answer, so only ask when the "
+            "answer would change what you do next.",
             RequestAnalystInputArgs,
             _INVESTIGATORS,
             _request_analyst_input,
@@ -526,8 +535,12 @@ TOOLS: dict[str, ToolSpec] = {
 }
 
 
-def tools_for(role: AgentRole) -> list[ToolSpec]:
-    return [spec for spec in TOOLS.values() if role in spec.roles]
+def tools_for(role: AgentRole, read_only: bool = False) -> list[ToolSpec]:
+    return [
+        spec
+        for spec in TOOLS.values()
+        if role in spec.roles and not (read_only and spec.name in WRITING_TOOLS)
+    ]
 
 
 def execute(ctx: ToolContext, name: str, arguments: Any) -> ToolOutcome:
@@ -535,10 +548,12 @@ def execute(ctx: ToolContext, name: str, arguments: Any) -> ToolOutcome:
     outcome, and it is returned to the model so it can correct itself."""
     spec = TOOLS.get(name)
     if spec is None:
-        allowed = ", ".join(s.name for s in tools_for(ctx.role))
+        allowed = ", ".join(s.name for s in tools_for(ctx.role, ctx.read_only))
         return _refused(f"unknown tool {name!r}; available: {allowed}")
     if ctx.role not in spec.roles:
         return _refused(f"the {ctx.role.value} role may not use {name}")
+    if ctx.read_only and name in WRITING_TOOLS:
+        return _refused(f"{name} is not available in read-only Ask mode")
     if not isinstance(arguments, dict):
         return _refused("arguments must be a JSON object")
     try:

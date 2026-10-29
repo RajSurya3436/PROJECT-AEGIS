@@ -3,11 +3,10 @@ from __future__ import annotations
 import streamlit as st
 
 from app.context import AppContext
-from app.domain.enums import ACTIVE_RUN_STATUSES, AgentRunStatus
+from app.domain.enums import ACTIVE_RUN_STATUSES, OPEN_RUN_STATUSES, AgentRunStatus
 from app.domain.errors import SocCopilotError
 from app.domain.models import AgentRun, Investigation
 from app.ollama_health import ollama_status
-from app.storage.agents import RESUMABLE
 
 _WAS_ACTIVE = "agents_were_active"
 
@@ -16,15 +15,20 @@ def _time(run: AgentRun) -> str:
     return run.created_at.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def render(ctx: AppContext, inv: Investigation) -> None:
+def ai_warning(ctx: AppContext) -> None:
     s = ctx.settings
     status, _ = ollama_status(s.ollama_base_url, s.ollama_model)
     if status != "reachable_model_present":
         st.warning(
             f"AI unavailable: Ollama {'is not running' if status == 'unreachable' else 'is up'}"
             f"{'' if status == 'unreachable' else f' but `{s.ollama_model}` is not installed'}."
-            " A run will fail straight away; everything else on this page still works."
+            " Agent runs and Ask fail straight away; everything else on this page still works."
         )
+
+
+def render(ctx: AppContext, inv: Investigation) -> None:
+    s = ctx.settings
+    ai_warning(ctx)
     st.caption(
         "Orchestrator, log investigator, threat intel and verifier (one local model, distinct "
         "prompts). Agents only use allowlisted tools, may only cite events a tool returned, and "
@@ -34,8 +38,9 @@ def render(ctx: AppContext, inv: Investigation) -> None:
     runs = ctx.agents.runs.for_investigation(inv.investigation_id)
     is_open = inv.status.value == "open"
     active = any(r.status in ACTIVE_RUN_STATUSES for r in runs)
-    if is_open and st.button("Run agents", type="primary", disabled=active):
-        _start(ctx, inv)
+    held = any(r.status in OPEN_RUN_STATUSES for r in runs)
+    if is_open and st.button("Run agents", type="primary", disabled=held):
+        _act(lambda: ctx.chat.start(inv.investigation_id))
     if not runs:
         st.caption("No agent runs yet." if is_open else "Reopen the investigation to run agents.")
         return
@@ -60,13 +65,11 @@ def render(ctx: AppContext, inv: Investigation) -> None:
     live()
 
 
-def _start(ctx: AppContext, inv: Investigation) -> None:
+def _act(action) -> None:
+    """Run a chat-service action (inline runs block, so show a spinner) and refresh."""
     try:
-        if ctx.agent_runner is not None:
-            ctx.agent_runner.start(ctx.agents, inv.investigation_id)
-        else:
-            with st.spinner("Agents are working..."):
-                ctx.agents.run_now(inv.investigation_id)
+        with st.spinner("Working..."):
+            action()
     except SocCopilotError as exc:
         st.error(str(exc))
     else:
@@ -82,19 +85,25 @@ def _render_run(ctx: AppContext, inv: Investigation, run: AgentRun, is_open: boo
     if run.error:
         (st.error if run.status is AgentRunStatus.FAILED else st.info)(run.error)
 
-    runner = ctx.agent_runner
-    running = runner is not None and run.status in ACTIVE_RUN_STATUSES
-    resumable = runner is not None and is_open and not running and run.status.value in RESUMABLE
-    if running and st.button("Stop run"):
-        runner.stop(run.run_id)
-        st.rerun()
-    if resumable and st.button("Resume from checkpoint"):
-        try:
-            runner.resume(ctx.agents, run.run_id)
-        except SocCopilotError as exc:
-            st.error(str(exc))
-        else:
-            st.rerun()
+    if run.status is AgentRunStatus.WAITING:
+        question = run.checkpoint.get("waiting_question", "")
+        st.info(f"Waiting for your reply (answer in the **Chat** tab): {question}")
+    inv_id = inv.investigation_id
+    controllable = is_open and (
+        run.status in OPEN_RUN_STATUSES or run.status is AgentRunStatus.INTERRUPTED
+    )
+    if controllable:
+        c1, c2, c3 = st.columns(3)
+        executing = run.status in ACTIVE_RUN_STATUSES
+        if c1.button("Pause run", disabled=not executing or bool(run.control)):
+            _act(lambda: ctx.chat.pause(inv_id))
+        if c2.button(
+            "Resume from checkpoint",
+            disabled=run.status not in (AgentRunStatus.PAUSED, AgentRunStatus.INTERRUPTED),
+        ):
+            _act(lambda: ctx.chat.resume(inv_id))
+        if c3.button("Stop run"):
+            _act(lambda: ctx.chat.stop(inv_id))
 
     if run.assessment is not None:
         _render_assessment(ctx, inv, run, is_open)

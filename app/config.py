@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     agent_max_specialist_turns: int = Field(default=4, gt=0, le=20)
     agent_max_run_seconds: int = Field(default=900, gt=0, le=3_600)
     agent_max_invalid_outputs: int = Field(default=3, gt=0, le=10)
+    agent_max_ask_steps: int = Field(default=4, gt=0, le=20)  # model calls per Ask answer
 
     database_path: Path = PROJECT_ROOT / "data" / "agentic_soc.db"
 

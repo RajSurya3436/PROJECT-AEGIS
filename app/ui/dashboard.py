@@ -60,10 +60,11 @@ def render(ctx: AppContext) -> None:
 
     st.subheader("Agent activity")
     by_run = ctx.agents.runs.count_by_status()
-    r1, r2, r3 = st.columns(3)
+    r1, r2, r3, r4 = st.columns(4)
     r1.metric("Running", by_run.get("running", 0) + by_run.get("queued", 0))
-    r2.metric("Completed runs", by_run.get("completed", 0))
-    r3.metric(
+    r2.metric("Paused / waiting for you", by_run.get("paused", 0) + by_run.get("waiting", 0))
+    r3.metric("Completed runs", by_run.get("completed", 0))
+    r4.metric(
         "Failed / stopped / limited",
         sum(by_run.get(k, 0) for k in ("failed", "stopped", "limit_reached", "interrupted")),
     )
