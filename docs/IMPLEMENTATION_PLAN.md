@@ -33,7 +33,9 @@ phase; each phase ends with tests + lint and a review before the next starts.
   threat intel / verifier prompts, ten allowlisted tools with strict argument schemas, structured
   outputs, citation checks, verifier adjustments, step/tool/time limits, checkpoints with
   resume and stop, Agents tab (see `docs/agents.md`)
-- [ ] 6 Analyst chat, pause/resume/stop/redirect, state locking
+- [x] **6 Analyst chat**: persistent chat with Ask (read-only) / Investigate / Control modes,
+  specialist selection, pause/resume/stop/redirect, blocking agent questions, truthful run
+  statuses, one open run per investigation (see `docs/agents.md`)
 - [ ] 7 Response policy, simulation, audit, Markdown/JSON export
 - [ ] 8 Optional file tail + loopback HTTP receiver
 - [ ] 9 Hardening, end-to-end tests, README, demo runbook
@@ -50,7 +52,7 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] Provider adapters, mocked tests (no network or keys needed; a guard fails any real call)
 - [x] Investigation, evidence provenance (agents add to it through `add_evidence`)
 - [x] Agents with real allowlisted tools (tested with a scripted model; real `qwen3:8b` not yet tried)
-- [ ] Chat / redirect / pause / resume / stop
+- [x] Chat / redirect / pause / resume / stop (prior evidence kept on redirect, tested)
 - [x] Verifier with inconclusive outcome (deterministic downgrades when evidence cannot carry a verdict)
 - [ ] Policy: simulation only
 - [~] Audit log, Markdown/JSON reports (reports done; audit log is Phase 7)
@@ -145,3 +147,25 @@ phase; each phase ends with tests + lint and a review before the next starts.
   Ollama call fail.
 - To do once `qwen3:8b` is pulled: run the demo investigation end to end, check that replies
   validate (format-constrained JSON with thinking off), and tune the prompts and limits.
+
+## Phase 6 design notes
+
+- `app/agents/chat.py` (`ChatService`), `app/storage/chat.py`, migration `0006_chat.sql`,
+  `app/ui/chat_panel.py`. The service takes a `launch(run_id)` callable: the background runner
+  in the app, `AgentService.execute` (inline) for in-memory databases and tests.
+- Control goes through the database, not thread events: `agent_runs.control` (pause/stop) and
+  pending directive rows in `chat_messages`, both read by the graph at each step boundary.
+  This works for any worker or connection and survives restarts.
+- Pause ends the worker after checkpointing (status `paused`); resume starts a new worker from
+  the checkpoint. Stopped is now final (it was resumable in Phase 5); paused, waiting and
+  interrupted runs resume.
+- `request_analyst_input` now blocks: the run ends the step as `waiting`, the question is posted
+  to the chat, and the analyst's reply resumes the same turn. `execute` re-checks for a reply
+  that arrived while it was returning, so a reply is never stranded.
+- Open runs (queued, running, paused, waiting) hold the investigation; `interrupted` does not,
+  so a crash never wedges a case, but resuming it is refused while another run is open.
+- `InvestigationService.close_hooks` lets the chat stop an open run and discard pending
+  instructions when the case closes.
+- Ask is a separate short loop (`ChatService._answer`), not a run: read-only `ToolContext`,
+  `AGENT_MAX_ASK_STEPS` model calls, IDs in the answer checked against stored data.
+- Not done on purpose: chat transcript in the exported report and an audit view (Phase 7).

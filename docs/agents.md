@@ -1,4 +1,4 @@
-# Agents (Phase 5)
+# Agents and analyst chat (Phases 5 and 6)
 
 Four roles, one local model (`qwen3:8b` through Ollama), distinct prompts. The model proposes;
 deterministic code decides. Code lives in `app/agents/`.
@@ -58,6 +58,7 @@ orchestrator. The verifier runs once at the end.
 
 | Setting | Default | Effect |
 |---|---|---|
+| `AGENT_MAX_ASK_STEPS` | 4 | model calls for one Ask answer (the last must answer) |
 | `AGENT_MAX_MODEL_CALLS` | 40 | run ends `limit_reached`; the last call is kept for the verifier |
 | `AGENT_MAX_TOOL_CALLS` | 30 | specialist work stops, verifier runs |
 | `AGENT_MAX_STEPS_PER_TURN` | 6 | specialist turn ends, back to the orchestrator |
@@ -67,29 +68,69 @@ orchestrator. The verifier runs once at the end.
 | `AGENT_MODEL_TIMEOUT_SECONDS` | 120 | per model call |
 | `AGENT_CONTEXT_TOKENS` | 16384 | Ollama `num_ctx` (its default is too small for the case file) |
 
-## Runs, checkpoints, stopping
+## Runs, checkpoints, statuses
 
 Runs are stored in `agent_runs` with the whole `RunState` as a checkpoint after every step, and
-every routing decision, tool call, result, refusal and error in `agent_steps` (shown on the
-**Agents** tab). Only one run per investigation can be active (checked in the same transaction
-as the insert). With a file database runs execute on a worker thread with their own connection;
-**Stop run** is checked between steps. Stopped runs, and runs left active when the app exited
-(marked `interrupted` at start-up), resume from their checkpoint. Closing the investigation
-stops a run at its next step.
+every routing decision, redirect, tool call, result, refusal and error in `agent_steps` (shown on
+the **Agents** tab). With a file database runs execute on a worker thread with their own
+connection; with an in-memory one they run inline.
 
-Statuses: `queued`, `running`, `completed`, `stopped`, `limit_reached`, `failed`,
-`interrupted`.
+| Status | Meaning | Next |
+|---|---|---|
+| `queued`, `running` | executing | pause, stop, redirect |
+| `paused` | the analyst paused it | resume, redirect (resumes), stop |
+| `waiting` | an agent asked a question (`request_analyst_input`) | reply in Investigate mode (resumes), stop |
+| `interrupted` | the app exited mid-run (set at start-up) | resume, stop |
+| `completed` | the verifier gave an assessment | final |
+| `stopped` | stopped by the analyst, or the investigation was closed | final |
+| `limit_reached`, `failed` | a limit, or the model was unavailable / kept replying badly | final |
+
+**Concurrency.** An investigation has at most one *open* run (queued, running, paused or
+waiting). Creating a run checks that in the same transaction as the insert; claiming a run to
+execute it is a single conditional `UPDATE`, so two clicks or two workers cannot both win, and
+chat directives are marked applied atomically so each is acted on exactly once. Closing an
+investigation stops its open run (at the next step if it is executing) and discards pending
+instructions.
+
+## Analyst chat (Phase 6)
+
+The **Chat** tab of an investigation stores every message and instruction in `chat_messages`
+before anything acts on it, next to notices from the agents (run started, paused, waiting with
+their question, finished with the assessment). All text is shown as plain text.
+
+- **Ask** (read-only): pick the log investigator, threat intel or the verifier. It answers from
+  the case file and may use read-only tools (search, events, timeline, rule explanation, local
+  IOC list). `add_evidence`, `request_analyst_input` and the provider lookups are refused in
+  code, not just left out of the prompt. Evidence and event IDs in the answer are checked and
+  unknown ones flagged. Ask works on closed investigations and is not a run.
+- **Investigate**: an instruction for the agents, optionally for one specialist. With no open
+  run it starts one; a paused run resumes with it; an executing run reads it at its next step.
+  When the agents are waiting, the message is the reply to their question and the turn carries
+  on.
+- **Control**: Pause, Resume, Stop, and Redirect (same as Investigate, logged as a redirect).
+
+How directives act (`AgentGraph._apply`): the current specialist turn ends with a note, the work
+goes to the chosen specialist (or back to the orchestrator, which is told to act on the latest
+analyst message first), and the analyst's words appear in every later prompt under *ANALYST
+MESSAGES*, outside the DATA fences. Each directive grants one extra specialist turn, so a
+redirect is honoured even after the turn limit. Nothing is deleted: evidence, notes and the
+step log stay. An instruction that arrives after the verifier has already started stays
+pending and is read first by the next run (the chat says so).
+
+Analyst messages direct the work but cannot lift the rules: tools, roles, citation checks and
+verifier adjustments apply to them like to anything else.
 
 ## Without Ollama
 
-Everything except agent runs works. The Agents tab shows *AI unavailable*; a run started anyway
-fails at its first call with that message, and no deterministic data is touched.
+Everything except agent runs and Ask works. The Chat and Agents tabs show *AI unavailable*; a
+run started anyway fails at its first call with that message, an Ask gets a system reply saying
+so, and no deterministic data is touched.
 `scripts\check_ollama.py` reports the server and model state.
 
 ## Not done yet (on purpose)
 
-- Chat, Ask/Investigate/Control modes, pause and redirect (Phase 6). `request_analyst_input`
-  records the question for the analyst but does not pause the run.
+- Several analysts on one case at once are kept consistent by the database rules above; there
+  is no presence or editing-lock UI.
 - Response planning and `propose_response` (Phase 7).
 - The prompts have only been exercised with a scripted model in tests; behaviour with the real
   `qwen3:8b` still has to be checked once it is pulled (see the implementation plan).

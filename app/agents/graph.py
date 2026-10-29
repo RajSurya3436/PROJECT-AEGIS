@@ -8,6 +8,10 @@ specialist, and the graph overrides it when a limit is near (the last model call
 for the verifier). After every step the whole ``RunState`` is checkpointed, so an interrupted
 run resumes from where it stopped. Model replies that fail validation are retried with the
 error, then the run fails; tool calls that are refused go back to the model as results.
+
+The analyst steers a run through ``RunControls``, read at every step boundary: pause and stop
+requests, and directives (instructions, redirects, replies to an agent's question). A redirect
+ends the current turn and sends the work where the analyst said; evidence is never removed.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -49,11 +53,12 @@ from app.domain.enums import (
     EvidenceSource,
     InvestigationStatus,
 )
-from app.domain.models import Assessment, Evidence
+from app.domain.models import Assessment, ChatEntry, Evidence
 from app.investigations.service import InvestigationService
 from app.storage.agents import AgentRunRepository
 
 MAX_NOTES = 12
+MAX_ANALYST_MESSAGES = 10
 CASE_EVIDENCE = 40
 VERIFIER_EVIDENCE = 80
 FULL_RESULTS_IN_TURN = 2
@@ -108,6 +113,29 @@ class RunState(BaseModel):
     invalid_outputs: int = 0
     last_rejection: str = ""
     elapsed_seconds: float = 0.0
+    analyst_messages: list[dict[str, str]] = Field(default_factory=list)
+    waiting_question: str = ""  # set while the run waits for the analyst's reply
+    bonus_turns: int = 0  # extra specialist turns granted by analyst directives
+
+
+class RunControls(Protocol):
+    """How the analyst reaches a run between steps (backed by the database in practice)."""
+
+    def requested(self) -> str | None:
+        """``pause``, ``stop`` or None."""
+        ...
+
+    def take_directives(self) -> list[ChatEntry]:
+        """Pending instructions, redirects and replies, each returned once."""
+        ...
+
+
+class NoControls:
+    def requested(self) -> str | None:
+        return None
+
+    def take_directives(self) -> list[ChatEntry]:
+        return []
 
 
 @dataclass(frozen=True)
@@ -137,18 +165,30 @@ class AgentGraph:
         run_id: str,
         investigation_id: str,
         state: RunState,
-        should_stop: Callable[[], bool] = lambda: False,
+        controls: RunControls | None = None,
     ) -> RunOutcome:
+        controls = controls or NoControls()
         started = self._clock()
         base_elapsed = state.elapsed_seconds
         limits = self.limits
         while state.node != "done":
             state.elapsed_seconds = base_elapsed + (self._clock() - started)
             self._checkpoint(run_id, state)
-            if should_stop():
+            requested = controls.requested()
+            if requested == "stop":
                 return RunOutcome(AgentRunStatus.STOPPED, error="stopped by the analyst")
+            if requested == "pause":
+                self._log(run_id, AgentRole.ORCHESTRATOR, "control", "paused by the analyst")
+                return RunOutcome(AgentRunStatus.PAUSED)
             if self.investigations.get(investigation_id).status is not InvestigationStatus.OPEN:
                 return RunOutcome(AgentRunStatus.STOPPED, error="the investigation was closed")
+            directives = controls.take_directives()
+            for directive in directives:
+                self._apply(run_id, state, directive)
+            if directives:
+                self._checkpoint(run_id, state)
+            if state.waiting_question:
+                return RunOutcome(AgentRunStatus.WAITING)
             if state.elapsed_seconds > limits.max_run_seconds:
                 return self._limit(run_id, f"time limit of {limits.max_run_seconds} s reached")
             if state.model_calls >= limits.max_model_calls:
@@ -183,19 +223,57 @@ class AgentGraph:
     def _step(self, run_id: str, investigation_id: str, state: RunState) -> RunOutcome | None:
         if state.node == "orchestrate":
             self._orchestrate(run_id, investigation_id, state)
-        elif state.node == "specialist":
-            self._specialist(run_id, investigation_id, state)
+            return None
+        if state.node == "specialist":
+            return self._specialist(run_id, investigation_id, state)
+        return self._verify(run_id, investigation_id, state)
+
+    def _apply(self, run_id: str, state: RunState, directive: ChatEntry) -> None:
+        """Fold one analyst directive into the run. A reply answers the waiting question and
+        the turn carries on; instructions and redirects end the current turn and send the work
+        to the chosen specialist (or back to the orchestrator). Evidence and notes stay."""
+        text = directive.content.strip()
+        kind = directive.kind.value
+        message: dict[str, str] = {"kind": kind, "text": text}
+        if state.waiting_question:
+            message["in_reply_to"] = state.waiting_question
+            state.waiting_question = ""
+        state.analyst_messages = [*state.analyst_messages, message][-MAX_ANALYST_MESSAGES:]
+        if kind == "reply" and "in_reply_to" in message:
+            self._log(
+                run_id,
+                AgentRole.ORCHESTRATOR,
+                "redirect",
+                f"analyst replied: {text}",
+                {"message_id": directive.message_id, "text": text},
+            )
+            return
+        target = directive.target_role
+        if state.node == "specialist":
+            self._end_turn(state, f"turn ended: redirected by the analyst ({text[:200]})")
+        state.bonus_turns += 1
+        if target in (AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL):
+            state.node, state.role, state.instruction = "specialist", target, text
+            state.turn, state.turn_steps = [], 0
+        elif target is AgentRole.VERIFIER:
+            state.node = "verify"
         else:
-            return self._verify(run_id, investigation_id, state)
-        return None
+            state.node = "orchestrate"
+        where = target.value if target else "orchestrator"
+        self._log(
+            run_id,
+            AgentRole.ORCHESTRATOR,
+            "redirect",
+            f"analyst {kind} -> {where}: {text}",
+            {"message_id": directive.message_id, "target": where, "text": text},
+        )
 
     def _orchestrate(self, run_id: str, investigation_id: str, state: RunState) -> None:
         ctx = self._tool_context(run_id, investigation_id, AgentRole.ORCHESTRATOR, state)
         user = "\n\n".join(
             [
                 self._case_file(ctx, state, CASE_EVIDENCE),
-                f"Specialist turns used: {state.specialist_turns} of "
-                f"{self.limits.max_specialist_turns}.",
+                f"Specialist turns used: {state.specialist_turns} of {self._turn_limit(state)}.",
                 "Decide who works next.",
             ]
         )
@@ -206,7 +284,7 @@ class AgentGraph:
         if decision.next == "verifier":
             self._to_verifier(run_id, state, decision.rationale or "orchestrator chose to verify")
             return
-        if state.specialist_turns >= self.limits.max_specialist_turns:
+        if state.specialist_turns >= self._turn_limit(state):
             self._to_verifier(run_id, state, "specialist turn limit reached")
             return
         state.node, state.role = "specialist", AgentRole(decision.next)
@@ -224,7 +302,7 @@ class AgentGraph:
             },
         )
 
-    def _specialist(self, run_id: str, investigation_id: str, state: RunState) -> None:
+    def _specialist(self, run_id: str, investigation_id: str, state: RunState) -> RunOutcome | None:
         role = state.role
         assert role is not None
         ctx = self._tool_context(run_id, investigation_id, role, state)
@@ -256,7 +334,7 @@ class AgentGraph:
             )
             self._end_turn(state, action.summary or "(no summary)")
             self._sync(ctx, state)
-            return
+            return None
         self._log(
             run_id,
             role,
@@ -286,12 +364,16 @@ class AgentGraph:
             }
         )
         state.turn_steps += 1
+        if ctx.waiting_question:
+            state.waiting_question = ctx.waiting_question
+            return RunOutcome(AgentRunStatus.WAITING)
         if state.turn_steps >= self.limits.max_steps_per_turn:
             self._end_turn(
                 state,
                 f"turn ended at the {self.limits.max_steps_per_turn}-step "
                 "limit before the specialist finished",
             )
+        return None
 
     def _verify(self, run_id: str, investigation_id: str, state: RunState) -> RunOutcome:
         ctx = self._tool_context(run_id, investigation_id, AgentRole.VERIFIER, state)
@@ -378,48 +460,17 @@ class AgentGraph:
         state.open_questions = list(ctx.open_questions)
 
     def _case_file(self, ctx: ToolContext, state: RunState, evidence_limit: int) -> str:
-        """Built by code from stored state on every call, so agents always see the current
-        evidence. The timeline here goes through the same tool, which registers its IDs as
-        returned (citable)."""
-        service = self.investigations
-        investigation = service.get(ctx.investigation_id)
-        alerts = [a for a in (service.alerts.get(i) for i in investigation.alert_ids) if a]
-        evidence = service.evidence(ctx.investigation_id)
-        timeline, _ = build_timeline(ctx, BuildTimelineArgs())
-        parts = [
-            prompts.data_block(
-                "investigation",
-                {
-                    "investigation_id": investigation.investigation_id,
-                    "title": investigation.title,
-                    "objective": investigation.objective,
-                },
-            ),
-            prompts.data_block(
-                "alerts",
-                [
-                    {
-                        "alert_id": a.alert_id,
-                        "rule_id": a.rule_id,
-                        "severity": a.severity.value,
-                        "explanation": a.explanation,
-                        "first_seen": a.first_seen.isoformat(),
-                        "last_seen": a.last_seen.isoformat(),
-                    }
-                    for a in alerts
-                ],
-            ),
-            prompts.data_block(
-                f"evidence (latest {min(len(evidence), evidence_limit)} of {len(evidence)})",
-                [compact_evidence(e) for e in evidence[-evidence_limit:]],
-            ),
-            prompts.data_block("timeline", timeline),
-        ]
-        if state.notes:
-            parts.append(prompts.data_block("specialist notes so far", state.notes[-MAX_NOTES:]))
-        if state.open_questions:
-            parts.append(prompts.data_block("questions for the analyst", state.open_questions))
-        return "\n\n".join(parts)
+        return build_case_file(
+            self.investigations,
+            ctx,
+            evidence_limit,
+            notes=state.notes,
+            questions=state.open_questions,
+            analyst_messages=state.analyst_messages,
+        )
+
+    def _turn_limit(self, state: RunState) -> int:
+        return self.limits.max_specialist_turns + state.bonus_turns
 
     @staticmethod
     def _turn_so_far(state: RunState) -> str:
@@ -477,6 +528,61 @@ class AgentGraph:
         if len(text) > 20_000:
             payload = {"truncated": True, "preview": text[:2_000]}
         self.runs.add_step(run_id, role, kind, summary[:300], payload, duration_ms)
+
+
+def build_case_file(
+    service: InvestigationService,
+    ctx: ToolContext,
+    evidence_limit: int,
+    *,
+    notes: list[dict[str, str]] | None = None,
+    questions: list[str] | None = None,
+    analyst_messages: list[dict[str, str]] | None = None,
+) -> str:
+    """Built by code from stored state on every call, so agents always see the current
+    evidence. The timeline goes through the same tool, which registers its IDs as returned
+    (citable). Analyst messages come last, outside the DATA fences: besides the role prompt
+    they are the only source of direction."""
+    investigation = service.get(ctx.investigation_id)
+    alerts = [a for a in (service.alerts.get(i) for i in investigation.alert_ids) if a]
+    evidence = service.evidence(ctx.investigation_id)
+    timeline, _ = build_timeline(ctx, BuildTimelineArgs())
+    parts = [
+        prompts.data_block(
+            "investigation",
+            {
+                "investigation_id": investigation.investigation_id,
+                "title": investigation.title,
+                "objective": investigation.objective,
+            },
+        ),
+        prompts.data_block(
+            "alerts",
+            [
+                {
+                    "alert_id": a.alert_id,
+                    "rule_id": a.rule_id,
+                    "severity": a.severity.value,
+                    "explanation": a.explanation,
+                    "first_seen": a.first_seen.isoformat(),
+                    "last_seen": a.last_seen.isoformat(),
+                }
+                for a in alerts
+            ],
+        ),
+        prompts.data_block(
+            f"evidence (latest {min(len(evidence), evidence_limit)} of {len(evidence)})",
+            [compact_evidence(e) for e in evidence[-evidence_limit:]],
+        ),
+        prompts.data_block("timeline", timeline),
+    ]
+    if notes:
+        parts.append(prompts.data_block("specialist notes so far", notes[-MAX_NOTES:]))
+    if questions:
+        parts.append(prompts.data_block("questions asked of the analyst", questions))
+    if analyst_messages:
+        parts.append(prompts.analyst_block(analyst_messages[-MAX_ANALYST_MESSAGES:]))
+    return "\n\n".join(parts)
 
 
 def check_assessment(

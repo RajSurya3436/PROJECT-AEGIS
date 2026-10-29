@@ -11,6 +11,8 @@ from app.domain.enums import (
     AgentRole,
     AgentRunStatus,
     AlertStatus,
+    ChatKind,
+    ChatMode,
     Confidence,
     Disposition,
     EventType,
@@ -249,6 +251,7 @@ class AgentRun(BaseModel):
     checkpoint: dict[str, Any] = Field(default_factory=dict)
     assessment: Assessment | None = None
     error: str | None = None
+    control: str | None = None  # pause or stop requested, not yet acted on
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None = None
@@ -265,3 +268,22 @@ class AgentStep(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     duration_ms: int | None = None
     created_at: datetime
+
+
+class ChatEntry(BaseModel):
+    """One chat message. ``author`` is ``analyst``, ``system`` or an agent role. Directives
+    (instructions, redirects, replies) carry a ``status``: pending until a run applies them."""
+
+    seq: int
+    message_id: str
+    investigation_id: str
+    author: str
+    mode: ChatMode
+    kind: ChatKind
+    target_role: AgentRole | None = None
+    content: str
+    run_id: str | None = None
+    status: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    applied_at: datetime | None = None

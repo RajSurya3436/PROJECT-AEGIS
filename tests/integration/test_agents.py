@@ -316,13 +316,17 @@ def test_time_limit_stops_the_run(demo, holder):
     assert run.status is AgentRunStatus.LIMIT_REACHED and "time limit" in run.error
 
 
-def test_stop_then_resume_continues_from_the_checkpoint(demo, holder):
+def test_pause_then_resume_continues_from_the_checkpoint(demo, holder):
     inv = _investigation(demo)
-    holder.model = ScriptedModel([route("log_investigator"), call("build_timeline")])
     run = demo.agents.create_run(inv.investigation_id)
-    calls = iter([False, False, True])
-    run = demo.agents.execute(run.run_id, lambda: next(calls))
-    assert run.status is AgentRunStatus.STOPPED
+
+    def pause_during_call(_messages):
+        demo.agents.runs.request_control(run.run_id, "pause")  # the analyst presses Pause
+        return call("build_timeline")
+
+    holder.model = ScriptedModel([route("log_investigator"), pause_during_call])
+    run = demo.agents.execute(run.run_id)
+    assert run.status is AgentRunStatus.PAUSED and run.control is None
     assert run.checkpoint["node"] == "specialist" and run.checkpoint["turn_steps"] == 1
 
     holder.model = ScriptedModel([finish("resumed"), route("verifier"), verdict()])
@@ -330,6 +334,22 @@ def test_stop_then_resume_continues_from_the_checkpoint(demo, holder):
     assert run.status is AgentRunStatus.COMPLETED
     assert run.model_calls == 5 and run.tool_calls == 1
     assert run.checkpoint["notes"][0]["summary"] == "resumed"
+
+
+def test_stopped_runs_are_final(demo, holder):
+    inv = _investigation(demo)
+    run = demo.agents.create_run(inv.investigation_id)
+
+    def stop_during_call(_messages):
+        demo.agents.runs.request_control(run.run_id, "stop")
+        return route("log_investigator")
+
+    holder.model = ScriptedModel([stop_during_call])
+    run = demo.agents.execute(run.run_id)
+    assert run.status is AgentRunStatus.STOPPED and run.error == "stopped by the analyst"
+    with pytest.raises(InvestigationError, match="cannot be started again"):
+        demo.agents.execute(run.run_id)
+    demo.agents.create_run(inv.investigation_id)  # the case is free for a new run
 
 
 def test_interrupted_runs_are_resumable(demo, holder):
@@ -350,7 +370,7 @@ def test_finished_runs_cannot_be_rerun(demo, holder):
 def test_one_active_run_per_investigation(demo, holder):
     inv = _investigation(demo)
     demo.agents.create_run(inv.investigation_id)
-    with pytest.raises(InvestigationError, match="already running"):
+    with pytest.raises(InvestigationError, match="already open"):
         demo.agents.create_run(inv.investigation_id)
 
 

@@ -89,6 +89,8 @@ class InvestigationService:
         self.alerts = detection.alerts
         self.reputation = reputation
         self._clock = clock
+        # Called with the investigation ID after it closes (e.g. to stop its agent run).
+        self.close_hooks: list[Callable[[str], None]] = []
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -145,6 +147,8 @@ class InvestigationService:
         ):
             raise InvestigationError("a malicious disposition must cite at least one observation")
         self.repo.close(investigation_id, disposition, confidence, reason[:MAX_CLAIM_CHARS], cited)
+        for hook in self.close_hooks:
+            hook(investigation_id)
         return self.get(investigation_id)
 
     def reopen(self, investigation_id: str) -> Investigation:

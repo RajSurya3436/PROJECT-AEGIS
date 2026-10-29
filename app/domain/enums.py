@@ -145,11 +145,47 @@ SPECIALISTS: tuple[AgentRole, ...] = (AgentRole.LOG_INVESTIGATOR, AgentRole.THRE
 class AgentRunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
+    PAUSED = "paused"  # the analyst paused it; resumable from its checkpoint
+    WAITING = "waiting"  # an agent asked the analyst a question; resumes once answered
     COMPLETED = "completed"  # the verifier produced an assessment
-    STOPPED = "stopped"  # an analyst asked it to stop
+    STOPPED = "stopped"  # the analyst stopped it, or the investigation was closed (final)
     LIMIT_REACHED = "limit_reached"  # a step, tool-call or time limit ended it early
     FAILED = "failed"  # model unavailable or repeatedly invalid output
     INTERRUPTED = "interrupted"  # the process ended mid-run; resumable from its checkpoint
 
 
+# Executing on a worker (or about to). Only these can still change on their own.
 ACTIVE_RUN_STATUSES = frozenset({AgentRunStatus.QUEUED, AgentRunStatus.RUNNING})
+# Holding the investigation: at most one run per investigation may be in one of these.
+OPEN_RUN_STATUSES = ACTIVE_RUN_STATUSES | {AgentRunStatus.PAUSED, AgentRunStatus.WAITING}
+RESUMABLE_RUN_STATUSES = frozenset(
+    {
+        AgentRunStatus.QUEUED,
+        AgentRunStatus.PAUSED,
+        AgentRunStatus.WAITING,
+        AgentRunStatus.INTERRUPTED,
+    }
+)
+
+
+class ChatMode(StrEnum):
+    ASK = "ask"  # read-only question; no evidence written, no external lookups
+    INVESTIGATE = "investigate"  # instruct the agents (starts or redirects a run)
+    CONTROL = "control"  # pause, resume, stop, redirect
+
+
+class ChatKind(StrEnum):
+    QUESTION = "question"  # analyst, Ask mode
+    ANSWER = "answer"  # agent reply in Ask mode
+    INSTRUCTION = "instruction"  # analyst, Investigate mode
+    REDIRECT = "redirect"  # analyst, Control mode
+    REPLY = "reply"  # analyst answering an agent's question (resumes a waiting run)
+    PAUSE = "pause"
+    RESUME = "resume"
+    STOP = "stop"
+    AGENT_QUESTION = "agent_question"  # request_analyst_input
+    NOTICE = "notice"  # run started, finished, failed, ...
+
+
+# Analyst messages the agent graph acts on, in order, at its next step boundary.
+DIRECTIVE_KINDS = frozenset({ChatKind.INSTRUCTION, ChatKind.REDIRECT, ChatKind.REPLY})

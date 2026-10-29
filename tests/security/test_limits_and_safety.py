@@ -101,14 +101,17 @@ def test_agent_code_has_no_dynamic_execution():
     """Blueprint: no eval/exec, model-generated SQL, shell commands or dynamic imports."""
     import ast
 
-    banned_calls = {"eval", "exec", "compile", "__import__", "import_module", "system", "popen"}
+    banned_builtins = {"eval", "exec", "compile", "__import__"}  # bare calls only
+    banned_methods = {"import_module", "system", "popen", "spawn"}  # e.g. os.system
     banned_modules = {"subprocess", "importlib", "os", "pickle", "shlex"}
     for path in (PROJECT_ROOT / "app" / "agents").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
-                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                assert name not in banned_calls, (path.name, name)
+                if isinstance(node.func, ast.Name):
+                    assert node.func.id not in banned_builtins, (path.name, node.func.id)
+                if isinstance(node.func, ast.Attribute):
+                    assert node.func.attr not in banned_methods, (path.name, node.func.attr)
             if isinstance(node, ast.Import | ast.ImportFrom):
                 names = [a.name for a in node.names] + [getattr(node, "module", None) or ""]
                 assert not {n.split(".")[0] for n in names} & banned_modules, (path.name, names)

@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.agents.chat import ChatService
 from app.agents.service import AgentRunner, AgentService, ModelFactory, ollama_model
 from app.config import Settings, get_settings
 from app.detection.engine import DetectionEngine
@@ -35,6 +36,7 @@ class AppContext:
     reputation: ReputationService
     investigations: InvestigationService
     agents: AgentService
+    chat: ChatService
     replay: ReplayRunner | None  # None for in-memory databases (a thread needs its own connection)
     agent_runner: AgentRunner | None  # None for in-memory databases; runs execute inline
 
@@ -91,6 +93,9 @@ def build_context(
         # Runs marked active by an earlier process are not running any more.
         AgentRunRepository(conn).mark_interrupted()
         agent_runner = AgentRunner(new_agent_session)
+    # Runs execute on a worker with a file database, inline with an in-memory one.
+    chat = ChatService(agents, agent_runner.launch if agent_runner else agents.execute)
+    investigations.close_hooks.append(chat.on_investigation_closed)
     return AppContext(
         settings=settings,
         conn=conn,
@@ -104,6 +109,7 @@ def build_context(
         reputation=reputation,
         investigations=investigations,
         agents=agents,
+        chat=chat,
         replay=None if database == ":memory:" else ReplayRunner(new_replay_engine),
         agent_runner=agent_runner,
     )
