@@ -1,0 +1,5 @@
+indicator,type,source,confidence,description,added
+203.0.113.80,ip,demo-intel,high,Payload staging server (synthetic),2026-03-01
+192.0.2.77,ip,demo-intel,medium,Observed password-spray source (synthetic),2026-02-20
+update-check.example,domain,demo-intel,low,Typosquat-style domain (synthetic),2026-02-11
+0000000000000000000000000000000000000000000000000000000000000001,sha256,demo-intel,medium,Placeholder hash (synthetic),2026-02-11

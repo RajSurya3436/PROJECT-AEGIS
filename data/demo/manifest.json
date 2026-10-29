@@ -1,0 +1,56 @@
+{
+  "name": "Agentic SOC Copilot demo dataset",
+  "dataset_version": 1,
+  "license": "Synthetic data, CC0-1.0",
+  "date": "2026-03-10",
+  "notes": [
+    "All records are synthetic. External IPs use RFC 5737 documentation ranges, which are reserved and skipped by external reputation lookups; demo reputation results are mocked.",
+    "One auth record contains a prompt-injection string in user_agent to test agent guardrails."
+  ],
+  "scenarios": [
+    {
+      "id": "A",
+      "summary": "12 failed VPN logons for dave from 203.0.113.45 (13:02-13:06), a success at 13:07, then encoded PowerShell, a download cradle from an IOC-listed IP, discovery commands and periodic HTTPS on WS-DAVE04."
+    },
+    {
+      "id": "B",
+      "summary": "Password spray from 192.0.2.77: one failure each for six users at 15:30, no success (ambiguous)."
+    },
+    {
+      "id": "benign",
+      "summary": "Workday logons, bob's two typos then success, admin PowerShell, signed inventory script with ExecutionPolicy Bypass, nightly backups."
+    }
+  ],
+  "files": [
+    {
+      "path": "auth_events.jsonl",
+      "source_id": "demo-auth",
+      "name": "Demo authentication events",
+      "format": "jsonl",
+      "default_event_type": "auth",
+      "expected_records": 65
+    },
+    {
+      "path": "endpoint_events.jsonl",
+      "source_id": "demo-endpoint",
+      "name": "Demo endpoint process events",
+      "format": "jsonl",
+      "default_event_type": "process",
+      "expected_records": 34
+    },
+    {
+      "path": "network_events.jsonl",
+      "source_id": "demo-network",
+      "name": "Demo network connection events",
+      "format": "jsonl",
+      "default_event_type": "network",
+      "expected_records": 37
+    }
+  ],
+  "ioc_files": [
+    {
+      "path": "local_iocs.csv",
+      "expected_records": 4
+    }
+  ]
+}
