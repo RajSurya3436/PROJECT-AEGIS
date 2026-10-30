@@ -63,7 +63,17 @@ SPECIALIST_REPLY = """\
 JSON reply, one step at a time:
 - to call a tool: {"action": "tool_call", "tool": "<name>", "arguments": {...}, "rationale": "..."}
 - to end your turn: {"action": "finish", "summary": "<what you found, with evidence IDs>"}
-Finish when the instruction is done or the tools cannot help further."""
+Record each finding with add_evidence (if you have it) before you finish: unrecorded findings
+are not seen by the verifier. Finish when the instruction is done or the tools cannot help
+further."""
+
+RECORD_REMINDER = """\
+REMINDER: you tried to finish without recording anything. The verifier only sees evidence
+recorded with add_evidence; your summary alone is not evidence. Now call add_evidence for your
+main finding, citing event IDs returned by your tool calls in this turn (category "observation"
+for what the events show, "contradiction" for signs of normal use, "missing_telemetry" for
+data that is absent). One finding per call. Finish without recording only if the events truly
+show nothing worth recording."""
 
 VERIFIER = f"""\
 You are the verifier in a security operations investigation. You do not collect data. Check
@@ -109,7 +119,8 @@ The analyst is asking you a question about this investigation ({role}). Answer i
 file, using read-only tools if you need more detail. You cannot record evidence, contact
 threat-intel providers or change anything in Ask mode. Mention the event and evidence IDs your
 answer rests on, give the case for and against where it matters, and say plainly when the data
-does not answer the question.
+does not answer the question. When you give both sides, label them "For compromise:" (signs of an
+attack) and "Against compromise:" (signs of normal use), and put each point under the right one.
 
 {policy}
 

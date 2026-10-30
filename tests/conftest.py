@@ -34,3 +34,11 @@ def _no_model_server(monkeypatch):
         raise AssertionError("tests must not contact Ollama")
 
     monkeypatch.setattr("app.agents.llm.urllib_post", refuse)
+
+
+@pytest.fixture(autouse=True)
+def _ollama_looks_down(monkeypatch):
+    """UI pages check Ollama's health; report it down so results do not depend on whether
+    the developer happens to have it running."""
+    for module in ("app.ui.agents_panel", "app.ui.dashboard", "app.ui.settings"):
+        monkeypatch.setattr(f"{module}.ollama_status", lambda *_a, **_k: ("unreachable", []))
