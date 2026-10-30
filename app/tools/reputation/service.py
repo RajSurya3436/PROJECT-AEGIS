@@ -11,6 +11,7 @@ import sqlite3
 from collections.abc import Callable, Iterable
 from datetime import timedelta
 
+from app.audit.log import FAILED, OK, AuditLog
 from app.config import Settings
 from app.domain.enums import ReputationStatus
 from app.domain.models import IpReputationReport, ReputationResult
@@ -62,6 +63,17 @@ def build_providers(
     return {p.name: p for p in providers}
 
 
+# Statuses that only come back from ``provider.lookup``, i.e. after an attempt to contact it.
+CONTACTED = frozenset(
+    {
+        ReputationStatus.FRESH,
+        ReputationStatus.RATE_LIMITED,
+        ReputationStatus.TIMEOUT,
+        ReputationStatus.PROVIDER_ERROR,
+    }
+)
+
+
 class ReputationService:
     def __init__(
         self,
@@ -75,6 +87,7 @@ class ReputationService:
         self.cache = ReputationCacheRepository(conn)
         self.iocs = IocRepository(conn)
         self.app_settings = AppSettingsRepository(conn)
+        self.audit = AuditLog(conn)
         self._clock = clock
 
     @property
@@ -84,8 +97,15 @@ class ReputationService:
             self.app_settings.get(EXTERNAL_LOOKUPS_KEY, self.settings.enable_external_reputation)
         )
 
-    def set_external_enabled(self, enabled: bool) -> None:
+    def set_external_enabled(self, enabled: bool, actor: str = "analyst") -> None:
         self.app_settings.set(EXTERNAL_LOOKUPS_KEY, bool(enabled))
+        self.audit.record(
+            actor,
+            "settings.external_reputation",
+            "setting",
+            EXTERNAL_LOOKUPS_KEY,
+            details={"enabled": bool(enabled)},
+        )
 
     def lookup_ip(
         self,
@@ -93,6 +113,8 @@ class ReputationService:
         providers: Iterable[str] | None = None,
         *,
         force_refresh: bool = False,
+        actor: str = "analyst",
+        investigation_id: str | None = None,
     ) -> IpReputationReport:
         """Local IOC match plus one result per requested provider. Never raises for provider
         problems; each failure is a status on that provider's result."""
@@ -108,7 +130,19 @@ class ReputationService:
             local_ioc=lookup_local_ioc(self.iocs, ip) if ip else None,
         )
         for name in names:
-            report.results.append(self._lookup_one(self.providers[name], ip, scope, force_refresh))
+            result = self._lookup_one(self.providers[name], ip, scope, force_refresh)
+            report.results.append(result)
+            if result.status in CONTACTED:
+                # The indicator went (or was about to go) to a third party: always audited.
+                self.audit.record(
+                    actor,
+                    "reputation.provider_request",
+                    "indicator",
+                    result.indicator,
+                    investigation_id=investigation_id,
+                    outcome=OK if result.status is ReputationStatus.FRESH else FAILED,
+                    details={"provider": name, "status": result.status.value},
+                )
         return report
 
     def _lookup_one(

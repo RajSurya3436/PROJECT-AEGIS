@@ -93,6 +93,34 @@ JSON reply: {{"disposition": "...", "confidence": "low"|"medium"|"high", "ration
 "unsupported_claims": []}}"""
 
 
+RESPONSE_PLANNER = f"""\
+You are the response planner in a security operations investigation. The investigation and
+the verifier's assessment are below. Propose proportionate next steps.
+- Choose actions only from the catalogue. The target must be an IP, host or user from the
+  entities list (escalate needs no target). Cite evidence IDs from the evidence list.
+- Prefer the least disruptive step that contains the risk. Low-impact steps (collect_triage,
+  watchlist, escalate) fit any suspicious case. High-impact steps (block_ip, isolate_host,
+  disable_account) only fit likely_malicious or confirmed_malicious. For benign_or_expected,
+  propose nothing or only a watchlist entry.
+- Every action is simulated and the analyst decides; code may refuse a proposal. Do not
+  propose the same action twice.
+
+{POLICY}
+
+JSON reply: {{"summary": "<the plan in two or three sentences>", "proposals": [{{"action":
+"...", "target": "...", "rationale": "...", "evidence_ids": ["..."]}}]}}"""
+
+
+def action_catalogue(specs: dict[Any, Any]) -> str:
+    lines = ["Action catalogue (nothing else exists):"]
+    for action, spec in specs.items():
+        lines.append(
+            f"- {action.value} (target: {spec.target_kind}, {spec.risk.value} impact, "
+            f"{'reversible' if spec.reversible else 'not reversible'}): {spec.title}"
+        )
+    return "\n".join(lines)
+
+
 def _neutralise(value: Any) -> Any:
     """Stop data from closing its own DATA fence or opening a fake one."""
     if isinstance(value, str):

@@ -6,7 +6,8 @@ whether the name exists, whether the calling role may use it, whether the argume
 call the same services the UI uses, so the Phase 4 evidence rules apply unchanged. There is no
 eval, no dynamic import, no SQL from the model: filters go through the allowlisted repository.
 
-``propose_response`` is deliberately absent until Phase 7 (response policy).
+``propose_response`` only stores a proposal; ``app/policy`` decides whether it stands, and
+nothing is ever executed. Every call, accepted or refused, is written to the audit log.
 """
 
 from __future__ import annotations
@@ -21,11 +22,20 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from pydantic import field_validator as validator
 
 from app.agents.schemas import json_schema
-from app.domain.enums import AgentRole, EventType, EvidenceCategory, EvidenceSource, Outcome
+from app.audit.log import OK, REJECTED, AuditLog
+from app.domain.enums import (
+    AgentRole,
+    EventType,
+    EvidenceCategory,
+    EvidenceSource,
+    Outcome,
+    ResponseAction,
+)
 from app.domain.errors import SocCopilotError
 from app.domain.models import Evidence, NormalizedEvent
 from app.investigations.service import InvestigationService
 from app.investigations.timeline import describe_event
+from app.policy.service import ResponseService
 from app.storage.repositories import EventFilters
 from app.tools.local_ioc import lookup_local_ioc
 
@@ -103,6 +113,15 @@ class AddEvidenceArgs(ToolArgs):
     claim: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
     event_ids: list[Id] = Field(default_factory=list, max_length=20)
     based_on_evidence_ids: list[Id] = Field(default_factory=list, max_length=20)
+
+
+class ProposeResponseArgs(ToolArgs):
+    action: ResponseAction
+    target: Annotated[str, StringConstraints(strip_whitespace=True, max_length=256)] = ""
+    rationale: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+    ]
+    evidence_ids: list[Id] = Field(min_length=1, max_length=10)
 
 
 class RequestAnalystInputArgs(ToolArgs):
@@ -447,10 +466,36 @@ def _request_analyst_input(
     }, "waiting for the analyst"
 
 
+def _propose_response(ctx: ToolContext, args: ProposeResponseArgs) -> tuple[dict[str, Any], str]:
+    rec = ResponseService(ctx.investigations).propose(
+        ctx.investigation_id,
+        args.action,
+        args.target,
+        args.rationale,
+        args.evidence_ids,
+        ctx.actor,
+    )
+    result = {
+        "recommendation_id": rec.recommendation_id,
+        "action": rec.action.value,
+        "target": rec.target,
+        "status": rec.status.value,
+        "risk": rec.risk.value,
+        "policy_notes": rec.policy_notes,
+    }
+    return result, f"{rec.action.value} {rec.target}: {rec.status.value}"
+
+
 _INVESTIGATORS = frozenset({AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL})
 # Tools that change state or send data out. Ask mode (read-only) cannot use them.
 WRITING_TOOLS = frozenset(
-    {"add_evidence", "request_analyst_input", "lookup_abuseipdb", "lookup_virustotal_ip"}
+    {
+        "add_evidence",
+        "request_analyst_input",
+        "lookup_abuseipdb",
+        "lookup_virustotal_ip",
+        "propose_response",
+    }
 )
 
 TOOLS: dict[str, ToolSpec] = {
@@ -531,6 +576,15 @@ TOOLS: dict[str, ToolSpec] = {
             _INVESTIGATORS,
             _request_analyst_input,
         ),
+        ToolSpec(
+            "propose_response",
+            "Propose one response action from the catalogue for a target seen in the events, "
+            "citing evidence IDs. It is only a proposal: policy may block it, the analyst "
+            "decides, and every action is simulated.",
+            ProposeResponseArgs,
+            frozenset({AgentRole.RESPONSE_PLANNER}),
+            _propose_response,
+        ),
     )
 }
 
@@ -545,7 +599,26 @@ def tools_for(role: AgentRole, read_only: bool = False) -> list[ToolSpec]:
 
 def execute(ctx: ToolContext, name: str, arguments: Any) -> ToolOutcome:
     """Validate and run one tool call. Never raises for a bad call: the refusal is the
-    outcome, and it is returned to the model so it can correct itself."""
+    outcome, and it is returned to the model so it can correct itself. Every call is audited."""
+    outcome = _execute(ctx, name, arguments)
+    AuditLog(ctx.investigations.conn).record(
+        ctx.actor,
+        f"tool.{name}" if name in TOOLS else "tool.unknown",
+        "tool",
+        str(name)[:64],
+        investigation_id=ctx.investigation_id,
+        outcome=OK if outcome.ok else REJECTED,
+        details={
+            "run_id": ctx.run_id,
+            "arguments": arguments if isinstance(arguments, dict) else str(arguments)[:200],
+            "summary": outcome.summary,
+            "read_only": ctx.read_only,
+        },
+    )
+    return outcome
+
+
+def _execute(ctx: ToolContext, name: str, arguments: Any) -> ToolOutcome:
     spec = TOOLS.get(name)
     if spec is None:
         allowed = ", ".join(s.name for s in tools_for(ctx.role, ctx.read_only))

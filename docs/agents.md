@@ -141,6 +141,7 @@ so, and no deterministic data is touched.
 
 - Several analysts on one case at once are kept consistent by the database rules above; there
   is no presence or editing-lock UI.
-- Response planning and `propose_response` (Phase 7).
-- The prompts have only been exercised with a scripted model in tests; behaviour with the real
-  `qwen3:8b` still has to be checked once it is pulled (see the implementation plan).
+- The response planner is a separate, on-request step, not part of a run; see
+  [response-and-audit.md](response-and-audit.md).
+- Prompts were tuned once against the real `qwen3:8b` on the demo case
+  (`scripts/run_agent_demo.py`); other datasets have not been tried.

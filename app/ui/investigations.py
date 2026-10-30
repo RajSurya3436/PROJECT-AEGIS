@@ -16,7 +16,7 @@ from app.domain.errors import SocCopilotError
 from app.domain.models import Evidence, Investigation, TimelineEntry
 from app.reporting.report import build_report, to_json, to_markdown
 from app.storage.repositories import CORRELATION_FIELDS
-from app.ui import agents_panel, chat_panel
+from app.ui import agents_panel, chat_panel, response_panel
 
 ANALYST = "analyst"
 SELECTED = "investigation_id"
@@ -66,7 +66,16 @@ def _render_investigation(ctx: AppContext, inv: Investigation) -> None:
     st.text(inv.objective)
 
     tabs = st.tabs(
-        ["Timeline", "Evidence", "Chat", "Agents", "Expand and look up", "Verdict", "Report"]
+        [
+            "Timeline",
+            "Evidence",
+            "Chat",
+            "Agents",
+            "Expand and look up",
+            "Response",
+            "Verdict",
+            "Report",
+        ]
     )
     with tabs[0]:
         _render_timeline(timeline)
@@ -79,8 +88,10 @@ def _render_investigation(ctx: AppContext, inv: Investigation) -> None:
     with tabs[4]:
         _render_expand(ctx, inv, timeline, is_open)
     with tabs[5]:
-        _render_verdict(ctx, inv, evidence, is_open)
+        response_panel.render(ctx, inv)
     with tabs[6]:
+        _render_verdict(ctx, inv, evidence, is_open)
+    with tabs[7]:
         _render_report(ctx, inv)
 
 
@@ -276,18 +287,33 @@ def _render_report(ctx: AppContext, inv: Investigation) -> None:
         ctx.investigations, inv.investigation_id, datetime.now(UTC).replace(microsecond=0)
     )
     markdown = to_markdown(report)
+
+    def exported(fmt: str) -> None:
+        ctx.audit.record(
+            ANALYST,
+            "report.exported",
+            "investigation",
+            inv.investigation_id,
+            investigation_id=inv.investigation_id,
+            details={"format": fmt, "generated_at": report.generated_at.isoformat()},
+        )
+
     c1, c2 = st.columns(2)
     c1.download_button(
         "Download Markdown",
         markdown,
         file_name=f"{inv.investigation_id}.md",
         mime="text/markdown",
+        on_click=exported,
+        args=("markdown",),
     )
     c2.download_button(
         "Download JSON",
         to_json(report),
         file_name=f"{inv.investigation_id}.json",
         mime="application/json",
+        on_click=exported,
+        args=("json",),
     )
     st.caption("Preview (source). Untrusted values are escaped in the Markdown.")
     st.code(markdown, language="markdown")

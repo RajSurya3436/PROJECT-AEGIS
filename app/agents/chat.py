@@ -120,6 +120,8 @@ class ChatService:
         text = self._clean(text)
         if role is AgentRole.ORCHESTRATOR:
             raise InvestigationError("choose a specialist, or leave it to the orchestrator")
+        if role is AgentRole.RESPONSE_PLANNER:
+            raise InvestigationError("the response planner runs from the Response tab")
         run = self.open_run(investigation_id)
         message = self.chat.add(
             investigation_id,
@@ -130,6 +132,7 @@ class ChatService:
             target_role=role,
             run_id=run.run_id if run else None,
         )
+        self._audit(message)
         if run is None:
             try:
                 run = self.agents.create_run(investigation_id)
@@ -205,13 +208,31 @@ class ChatService:
     def _control_message(
         self, investigation_id: str, kind: ChatKind, label: str, run: AgentRun
     ) -> ChatEntry:
-        return self.chat.add(
+        message = self.chat.add(
             investigation_id,
             author=ANALYST,
             mode=ChatMode.CONTROL,
             kind=kind,
             content=f"{label} run {run.run_id}",
             run_id=run.run_id,
+        )
+        self._audit(message)
+        return message
+
+    def _audit(self, message: ChatEntry) -> None:
+        """Every analyst instruction, question and control request."""
+        self.agents.audit.record(
+            ANALYST,
+            f"chat.{message.kind.value}",
+            "chat_message",
+            message.message_id,
+            investigation_id=message.investigation_id,
+            details={
+                "mode": message.mode.value,
+                "target_role": message.target_role.value if message.target_role else None,
+                "run_id": message.run_id,
+                "text": message.content[:500],
+            },
         )
 
     # --- Ask (read-only) -------------------------------------------------------------------
@@ -232,6 +253,7 @@ class ChatService:
             content=question,
             target_role=role,
         )
+        self._audit(asked)
         try:
             answer, payload = self._answer(investigation_id, asked, role)
         except ModelUnavailableError as exc:

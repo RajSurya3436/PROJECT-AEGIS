@@ -36,7 +36,9 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] **6 Analyst chat**: persistent chat with Ask (read-only) / Investigate / Control modes,
   specialist selection, pause/resume/stop/redirect, blocking agent questions, truthful run
   statuses, one open run per investigation (see `docs/agents.md`)
-- [ ] 7 Response policy, simulation, audit, Markdown/JSON export
+- [x] **7 Response policy, simulation, audit**: eight-action catalogue, deterministic policy gate,
+  approve/reject/simulate (simulation only), AI response planner via `propose_response`,
+  append-only audit log and page, report schema 2 (see `docs/response-and-audit.md`)
 - [ ] 8 Optional file tail + loopback HTTP receiver, Wazuh integration (see below)
 - [ ] 9 Hardening, end-to-end tests, README, demo runbook
 
@@ -54,10 +56,10 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] Agents with real allowlisted tools (scripted-model tests; demo case run with real `qwen3:8b`)
 - [x] Chat / redirect / pause / resume / stop (prior evidence kept on redirect, tested)
 - [x] Verifier with inconclusive outcome (deterministic downgrades when evidence cannot carry a verdict)
-- [ ] Policy: simulation only
-- [~] Audit log, Markdown/JSON reports (reports done; audit log is Phase 7)
+- [x] Policy: simulation only (no integration exists; tested that nothing executes)
+- [x] Audit log, Markdown/JSON reports (append-only audit, report schema 2 with audit trail)
 - [x] Prompt injection does not override policy (fenced data, allowlist, citation and verdict
-  checks; tested with a model that obeys injected text)
+  checks, response policy gate; tested with models that obey injected text)
 - [~] README: privacy, keys, provider limits, troubleshooting (present; demo steps pending)
 
 ## Phase 1 design notes
@@ -212,6 +214,26 @@ Ask once called 203.0.113.45 an IOC (the IOC is 203.0.113.80); Ask checks IDs, n
 
 Tests no longer depend on whether Ollama happens to be running (the UI health check is stubbed
 in `tests/conftest.py`).
+
+## Phase 7 design notes
+
+- `app/policy/` (catalogue, policy checks, `ResponseService`), `app/agents/planner.py`,
+  `app/audit/`, `app/storage/audit.py` and `responses.py`, migration `0007_response_audit.sql`,
+  `app/ui/response_panel.py`, `app/ui/audit.py`. Design: ADR 0003; details:
+  `docs/response-and-audit.md`.
+- The response planner is not part of the agent run: one model call on request, from the
+  latest completed run's assessment. Its proposals go through the `propose_response` tool
+  (response-planner role only), so schema, policy and audit apply as to any tool.
+- Policy is code: catalogued actions only, targets from the investigation's events (stored as
+  spelled there), `block_ip` external only, evidence required, agent proposals proportionate to
+  the assessment, medium/high impact need approval. Blocked proposals are stored with reasons.
+- Audit is written by the services (not the UI) and is append-only by trigger. Migrations are now
+  split with `sqlite3.complete_statement`, so trigger bodies survive.
+- Real-model check (2026-10-30, `qwen3:8b`): `scripts/run_agent_demo.py` runs the whole
+  blueprint story; with a `suspicious_inconclusive` assessment the planner proposed only
+  low-impact watchlist entries (30 s, valid on the first try), which were simulated.
+- Not done on purpose: a configurable list of protected entities (e.g. domain controllers),
+  more than eight actions, multi-analyst identities (every UI actor is `analyst`).
 
 ## Phase 8 scope: live inputs and Wazuh (added 2026-10-30)
 

@@ -7,13 +7,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.agents.chat import ChatService
+from app.agents.planner import ResponsePlanner
 from app.agents.service import AgentRunner, AgentService, ModelFactory, ollama_model
+from app.audit.log import AuditLog
 from app.config import Settings, get_settings
 from app.detection.engine import DetectionEngine
 from app.ingestion.iocs import load_demo_iocs
 from app.ingestion.replay import ReplayEngine, ReplayRunner, build_plan
 from app.ingestion.service import IngestionService
 from app.investigations.service import InvestigationService
+from app.policy.service import ResponseService
 from app.storage.agents import AgentRunRepository
 from app.storage.alerts import AlertRepository, IocRepository
 from app.storage.db import open_database
@@ -37,6 +40,9 @@ class AppContext:
     investigations: InvestigationService
     agents: AgentService
     chat: ChatService
+    responses: ResponseService
+    planner: ResponsePlanner
+    audit: AuditLog
     replay: ReplayRunner | None  # None for in-memory databases (a thread needs its own connection)
     agent_runner: AgentRunner | None  # None for in-memory databases; runs execute inline
 
@@ -96,6 +102,7 @@ def build_context(
     # Runs execute on a worker with a file database, inline with an in-memory one.
     chat = ChatService(agents, agent_runner.launch if agent_runner else agents.execute)
     investigations.close_hooks.append(chat.on_investigation_closed)
+    responses = ResponseService(investigations)
     return AppContext(
         settings=settings,
         conn=conn,
@@ -110,6 +117,9 @@ def build_context(
         investigations=investigations,
         agents=agents,
         chat=chat,
+        responses=responses,
+        planner=ResponsePlanner(agents, responses),
+        audit=AuditLog(conn),
         replay=None if database == ":memory:" else ReplayRunner(new_replay_engine),
         agent_runner=agent_runner,
     )

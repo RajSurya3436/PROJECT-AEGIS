@@ -25,8 +25,12 @@ SECTIONS = (
     "## Analyst notes",
     "## Contradictions",
     "## Gaps and missing telemetry",
+    "## Analyst instructions",
+    "## Agent assessment (advisory)",
     "## Verdict",
     "## Recommendations and simulated actions",
+    "## Next steps",
+    "## Audit trail",
     "## Limitations",
 )
 
@@ -49,7 +53,7 @@ def test_report_has_every_section_and_is_deterministic(ctx):
         assert heading in markdown
     assert "No disposition recorded yet." in markdown
     data = json.loads(to_json(first))
-    assert data["schema_version"] == 1 and data["verdict"] is None
+    assert data["schema_version"] == 2 and data["verdict"] is None
     assert data["alerts"][0]["rule_id"] == "auth.failures_then_success"
     assert len(data["timeline"]) == len(ctx.investigations.timeline(inv.investigation_id))
     assert data["gaps"] and data["provider_findings"]
@@ -108,6 +112,8 @@ def test_hostile_log_values_cannot_break_report_markdown(ctx):
     markdown = to_markdown(build_report(ctx.investigations, inv.investigation_id, GENERATED))
     assert "<script>" not in markdown
     assert "[pwn](http" not in markdown
-    for line in markdown.splitlines():
-        if line.startswith("| 2026-"):  # timeline rows keep exactly 6 cells
-            assert line.replace("\\|", "").count("|") == 7
+    timeline = markdown.split("## Timeline", 1)[1].split("\n## ", 1)[0]
+    rows = [line for line in timeline.splitlines() if line.startswith("| 2026-")]
+    assert rows
+    for line in rows:  # timeline rows keep exactly 6 cells
+        assert line.replace("\\|", "").count("|") == 7

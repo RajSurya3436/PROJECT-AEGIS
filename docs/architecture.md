@@ -21,6 +21,9 @@ demo dataset / file upload   (file tail, HTTP receiver: later phases)
  AgentGraph (app/agents/) -> allowlisted tools -> the same service methods
    orchestrator / log investigator / threat intel / verifier; one local model (Ollama)
                  |
+     ResponsePlanner -> propose_response -> policy gate (app/policy) -> simulate only
+     AuditLog <- every service that changes state or sends data out
+                 |
      ReputationService (app/tools/reputation/)   <- on request only, never per event
        local IOC list + cache (reputation_cache) + AbuseIPDB / VirusTotal over HTTPS
 ```
@@ -53,6 +56,11 @@ Replay (`app/ingestion/replay.py`) feeds `IngestionService` like any other sourc
 | `app/agents/chat.py` | analyst chat: Ask (read-only), Investigate, Control; directives and run control |
 | `app/storage/chat.py` | chat messages and pending directives (all SQL) |
 | `app/ui/chat_panel.py` | Chat tab |
+| `app/policy/` | response action catalogue, deterministic policy gate, `ResponseService` (simulation only) |
+| `app/agents/planner.py` | response planner: one model call, proposals via `propose_response` |
+| `app/audit/`, `app/storage/audit.py` | append-only audit log written by the services |
+| `app/storage/responses.py` | recommendations (all SQL) |
+| `app/ui/response_panel.py`, `app/ui/audit.py` | Response tab, Audit log page |
 
 ## Rules
 

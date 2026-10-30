@@ -82,9 +82,19 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
 
 
 def _split_statements(sql: str) -> list[str]:
-    # Migrations are plain DDL without triggers, so splitting on ';' is safe.
+    # Split on ';' but keep a trigger body (BEGIN ... ; ... END;) together: a piece is only a
+    # statement once SQLite considers it complete.
     lines = [line for line in sql.splitlines() if not line.strip().startswith("--")]
-    return [stmt.strip() for stmt in "\n".join(lines).split(";") if stmt.strip()]
+    statements, buffer = [], ""
+    for piece in "\n".join(lines).split(";"):
+        buffer += piece + ";"
+        if sqlite3.complete_statement(buffer):
+            if buffer.strip(" \n;"):
+                statements.append(buffer.strip().removesuffix(";").strip())
+            buffer = ""
+    if buffer.strip(" \n;"):
+        statements.append(buffer.strip().removesuffix(";").strip())
+    return statements
 
 
 def open_database(database_path: str | Path) -> sqlite3.Connection:

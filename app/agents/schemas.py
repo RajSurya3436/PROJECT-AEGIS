@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from app.domain.enums import Confidence, Disposition
+from app.domain.enums import Confidence, Disposition, ResponseAction
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1_500)]
 Short = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
@@ -45,6 +45,21 @@ class VerifierReport(ModelOutput):
     contradicting_evidence_ids: list[Id] = Field(default_factory=list, max_length=30)
     gaps: list[Short] = Field(default_factory=list, max_length=10)
     unsupported_claims: list[Short] = Field(default_factory=list, max_length=10)
+
+
+class ProposalItem(ModelOutput):
+    action: ResponseAction
+    target: Annotated[str, StringConstraints(strip_whitespace=True, max_length=256)] = ""
+    rationale: Short
+    evidence_ids: list[Id] = Field(default_factory=list, max_length=10)
+
+
+class ResponsePlan(ModelOutput):
+    """Response planner: a short plan and at most five proposals. Each proposal still goes
+    through the propose_response tool and the policy gate."""
+
+    summary: Text
+    proposals: list[ProposalItem] = Field(default_factory=list, max_length=5)
 
 
 def json_schema(model: type[BaseModel]) -> dict[str, Any]:

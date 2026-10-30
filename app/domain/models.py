@@ -20,7 +20,10 @@ from app.domain.enums import (
     EvidenceSource,
     InvestigationStatus,
     Outcome,
+    RecommendationStatus,
     ReputationStatus,
+    ResponseAction,
+    RiskLevel,
     Severity,
     SourceStatus,
     SourceType,
@@ -287,3 +290,40 @@ class ChatEntry(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     applied_at: datetime | None = None
+
+
+class Recommendation(BaseModel):
+    """A proposed response step. Advisory and simulated only; the policy fields are set by
+    code (``app/policy``), never by the model."""
+
+    recommendation_id: str
+    investigation_id: str
+    action: ResponseAction
+    target: str
+    rationale: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    risk: RiskLevel
+    reversible: bool
+    requires_approval: bool
+    status: RecommendationStatus
+    policy_notes: list[str] = Field(default_factory=list)
+    proposed_by: str
+    proposed_at: datetime
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    decision_note: str | None = None
+    simulation: dict[str, Any] | None = None
+    simulated_at: datetime | None = None
+
+
+class AuditEvent(BaseModel):
+    seq: int
+    audit_id: str
+    at: datetime
+    actor: str
+    action: str
+    target_type: str
+    target_id: str
+    investigation_id: str | None = None
+    outcome: str
+    details: dict[str, Any] = Field(default_factory=dict)

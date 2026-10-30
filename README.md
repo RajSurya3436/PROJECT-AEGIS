@@ -4,8 +4,8 @@ A local-first SOC investigation app: ingest security events, run deterministic d
 (in later phases) investigate alerts with tool-using agents and an evidence-backed report.
 It is an investigation layer, **not** a SIEM replacement.
 
-**Status: Phases 0 to 6 complete (data foundation, replay, deterministic detection, IP
-reputation, investigations and reports, agent graph, analyst chat).** Working
+**Status: Phases 0 to 7 complete (data foundation, replay, deterministic detection, IP
+reputation, investigations and reports, agent graph, analyst chat, response policy and audit).** Working
 today: JSONL/NDJSON/CSV/JSON import with field-mapping preview, UTC normalization, quarantine of
 malformed rows, a SQLite event store with search and related-event lookup, a bundled synthetic
 demo dataset with timed replay (speed, pause, resume, stop, restart), five versioned detection
@@ -18,8 +18,13 @@ evidence with provenance, record a disposition, and export Markdown/JSON reports
 investigation through allowlisted tools and propose an evidence-checked assessment that the
 analyst can accept. The analyst chats with them: Ask (read-only questions), Investigate
 (instructions, replies to the agents' questions) and Control (pause, resume, stop, redirect).
-Not yet built: response planning, audit log. See
+A response planner proposes next steps from a fixed catalogue; code policy decides what may
+stand, the analyst approves or rejects, and **every action is simulated** (no firewall, EDR or
+identity integration exists). An append-only audit log records instructions, tool calls,
+external requests, approvals, simulations and failures. Not yet built: file tail, HTTP
+receiver, Wazuh (Phase 8). See
 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md), [docs/agents.md](docs/agents.md),
+[docs/response-and-audit.md](docs/response-and-audit.md),
 [docs/detection-rules.md](docs/detection-rules.md) and [docs/reputation.md](docs/reputation.md).
 
 ## Setup (Windows PowerShell)

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.audit.log import AuditLog
 from app.config import Settings
 from app.detection.engine import DetectionEngine
 from app.domain.enums import (
@@ -44,6 +45,7 @@ from app.tools.local_ioc import lookup_local_ioc
 from app.tools.reputation.service import ReputationService
 
 SYSTEM = "system"
+ANALYST = "analyst"
 MAX_CLAIM_CHARS = 2_000
 MAX_CITED_EVENTS = 50
 MALICIOUS = (Disposition.CONFIRMED_MALICIOUS, Disposition.LIKELY_MALICIOUS)
@@ -91,6 +93,7 @@ class InvestigationService:
         self._clock = clock
         # Called with the investigation ID after it closes (e.g. to stop its agent run).
         self.close_hooks: list[Callable[[str], None]] = []
+        self.audit = AuditLog(conn)
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -100,7 +103,9 @@ class InvestigationService:
             raise NotFoundError(f"unknown investigation: {investigation_id}")
         return investigation
 
-    def start_from_alert(self, alert_id: str, objective: str | None = None) -> Investigation:
+    def start_from_alert(
+        self, alert_id: str, objective: str | None = None, actor: str = ANALYST
+    ) -> Investigation:
         """Open an investigation for an alert (or return the open one that already covers it)
         and run the deterministic baseline: alert evidence, related events, local IOC matches
         and telemetry coverage checks."""
@@ -119,8 +124,16 @@ class InvestigationService:
             self.repo.create(investigation_id, alert.title[:200], objective[:MAX_CLAIM_CHARS])
             self.repo.link_alert(investigation_id, alert_id)
             self._baseline(investigation_id, alert)
+        self.audit.record(
+            actor,
+            "investigation.opened",
+            "investigation",
+            investigation_id,
+            investigation_id=investigation_id,
+            details={"alert_id": alert_id, "rule_id": alert.rule_id},
+        )
         if alert.status in (AlertStatus.NEW, AlertStatus.ACKNOWLEDGED):
-            self.detection.transition(alert_id, AlertStatus.INVESTIGATING)
+            self.detection.transition(alert_id, AlertStatus.INVESTIGATING, actor=SYSTEM)
         return self.get(investigation_id)
 
     def close(
@@ -130,6 +143,7 @@ class InvestigationService:
         confidence: Confidence,
         reason: str,
         evidence_ids: list[str],
+        actor: str = ANALYST,
     ) -> Investigation:
         self._require_open(investigation_id)
         reason = reason.strip()
@@ -147,14 +161,33 @@ class InvestigationService:
         ):
             raise InvestigationError("a malicious disposition must cite at least one observation")
         self.repo.close(investigation_id, disposition, confidence, reason[:MAX_CLAIM_CHARS], cited)
+        self.audit.record(
+            actor,
+            "investigation.closed",
+            "investigation",
+            investigation_id,
+            investigation_id=investigation_id,
+            details={
+                "disposition": disposition.value,
+                "confidence": confidence.value,
+                "evidence_ids": cited,
+            },
+        )
         for hook in self.close_hooks:
             hook(investigation_id)
         return self.get(investigation_id)
 
-    def reopen(self, investigation_id: str) -> Investigation:
+    def reopen(self, investigation_id: str, actor: str = ANALYST) -> Investigation:
         if self.get(investigation_id).status is not InvestigationStatus.CLOSED:
             raise InvestigationError("investigation is already open")
         self.repo.reopen(investigation_id)
+        self.audit.record(
+            actor,
+            "investigation.reopened",
+            "investigation",
+            investigation_id,
+            investigation_id=investigation_id,
+        )
         return self.get(investigation_id)
 
     def _require_open(self, investigation_id: str) -> Investigation:
@@ -173,6 +206,15 @@ class InvestigationService:
         self._require_open(investigation_id)
         added = self._add_matches(investigation_id, filters, reason.strip()[:300], actor)
         self.repo.touch(investigation_id)
+        if not actor.startswith("agent:"):  # agent searches are audited as tool calls
+            self.audit.record(
+                actor,
+                "investigation.scope_expanded",
+                "investigation",
+                investigation_id,
+                investigation_id=investigation_id,
+                details={"reason": reason.strip()[:300], "added": added},
+            )
         return added
 
     def expand_around_entity(
@@ -285,6 +327,17 @@ class InvestigationService:
                 if e.evidence_id == evidence.evidence_id
             )
         self.repo.touch(investigation_id)
+        if (
+            source_type is EvidenceSource.ANALYST
+        ):  # system and agent evidence come from audited steps
+            self.audit.record(
+                collected_by,
+                "evidence.added",
+                "evidence",
+                evidence.evidence_id,
+                investigation_id=investigation_id,
+                details={"category": category.value, "event_ids": cited[:10]},
+            )
         return evidence
 
     def evidence(self, investigation_id: str) -> list[Evidence]:
@@ -305,7 +358,9 @@ class InvestigationService:
         if not citing:
             raise InvestigationError(f"{ip} does not appear in this investigation's events")
         event_ids = [e.event_id for e in citing][:MAX_CITED_EVENTS]
-        report = self.reputation.lookup_ip(ip, providers)
+        report = self.reputation.lookup_ip(
+            ip, providers, actor=actor, investigation_id=investigation_id
+        )
         added: list[Evidence] = []
         if report.local_ioc is not None:
             added.append(self._ioc_evidence(investigation_id, ip, event_ids, actor))
