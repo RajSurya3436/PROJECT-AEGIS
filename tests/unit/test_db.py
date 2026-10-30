@@ -7,7 +7,7 @@ from app.storage.db import current_version, migrate, open_database, transaction
 
 def test_migrations_apply_once_and_are_idempotent():
     conn = open_database(":memory:")
-    assert current_version(conn) == 6
+    assert current_version(conn) == 7
     assert migrate(conn) == []
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"events", "data_sources", "parse_errors", "app_settings", "schema_migrations"} <= tables

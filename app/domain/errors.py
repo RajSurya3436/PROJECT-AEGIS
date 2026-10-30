@@ -35,3 +35,7 @@ class InvalidRuleConfigError(SocCopilotError):
 
 class InvestigationError(SocCopilotError):
     """An investigation action is invalid (closed investigation, uncited events, bad verdict)."""
+
+
+class ResponseError(SocCopilotError):
+    """A response proposal or decision is invalid (unknown action, wrong status, closed case)."""

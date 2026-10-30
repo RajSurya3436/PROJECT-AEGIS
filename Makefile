@@ -2,7 +2,7 @@
 # listed in README.md directly.
 PY ?= .venv/Scripts/python
 
-.PHONY: install test lint format run validate check-ollama
+.PHONY: install test lint format run validate check-ollama demo-agents
 
 install:
 	python -m venv .venv
@@ -26,3 +26,7 @@ validate:
 
 check-ollama:
 	$(PY) scripts/check_ollama.py
+
+# Whole demo story against the real local model (needs Ollama with the model pulled).
+demo-agents:
+	$(PY) scripts/run_agent_demo.py

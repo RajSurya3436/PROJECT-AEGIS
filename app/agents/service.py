@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 from app.agents.graph import AgentGraph, Limits, RunOutcome, RunState
 from app.agents.llm import ChatModel, OllamaChatModel
+from app.audit.log import FAILED, OK, AuditLog
 from app.config import Settings
 from app.domain.enums import (
     RESUMABLE_RUN_STATUSES,
@@ -75,6 +76,7 @@ class AgentService:
         self.investigations = investigations
         self.runs = AgentRunRepository(conn)
         self.chat = ChatRepository(conn)
+        self.audit = AuditLog(conn)
         self._model_factory = model_factory
 
     def model(self) -> ChatModel:
@@ -89,6 +91,9 @@ class AgentService:
                 "an agent run is already open on this investigation (running, paused or "
                 "waiting); control it from the chat instead"
             )
+        self.audit.record(
+            SYSTEM, "agent_run.created", "agent_run", run_id, investigation_id=investigation_id
+        )
         return self.get(run_id)
 
     def get(self, run_id: str) -> AgentRun:
@@ -114,6 +119,7 @@ class AgentService:
             outcome = self._run_graph(run, state)
             self.runs.finish(run_id, outcome.status, outcome.assessment, outcome.error)
             run = self.get(run_id)
+            self._audit_end(run)
             self._announce(run, state)
             pending = self.chat.pending(run.investigation_id)
             if run.status is AgentRunStatus.WAITING and pending:
@@ -158,6 +164,26 @@ class AgentService:
         except Exception as exc:  # a bug must not leave the run "running" forever
             logger.exception("agent run %s failed", run.run_id)
             return RunOutcome(AgentRunStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
+
+    def _audit_end(self, run: AgentRun) -> None:
+        bad = (AgentRunStatus.FAILED, AgentRunStatus.LIMIT_REACHED)
+        details: dict[str, object] = {
+            "model_calls": run.model_calls,
+            "tool_calls": run.tool_calls,
+            "error": run.error,
+        }
+        if run.assessment is not None:
+            details["assessment"] = run.assessment.disposition.value
+            details["confidence"] = run.assessment.confidence.value
+        self.audit.record(
+            "agents",
+            f"agent_run.{run.status.value}",
+            "agent_run",
+            run.run_id,
+            investigation_id=run.investigation_id,
+            outcome=FAILED if run.status in bad else OK,
+            details=details,
+        )
 
     def run_now(self, investigation_id: str) -> AgentRun:
         return self.execute(self.create_run(investigation_id).run_id)

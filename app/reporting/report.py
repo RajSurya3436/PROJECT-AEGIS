@@ -15,12 +15,24 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.domain.enums import EvidenceCategory, EvidenceSource
-from app.domain.models import Evidence, Investigation, TimelineEntry
+from app.audit.log import AuditLog
+from app.domain.enums import (
+    OPEN_RECOMMENDATION_STATUSES,
+    AgentRunStatus,
+    EvidenceCategory,
+    EvidenceSource,
+    InvestigationStatus,
+    RecommendationStatus,
+)
+from app.domain.models import AuditEvent, Evidence, Investigation, Recommendation, TimelineEntry
 from app.investigations.service import InvestigationService
+from app.storage.agents import AgentRunRepository
+from app.storage.chat import ChatRepository
+from app.storage.responses import RecommendationRepository
 
-REPORT_SCHEMA_VERSION = 1
-NOT_YET = "Not available yet: response planning and simulated actions arrive in Phase 7."
+REPORT_SCHEMA_VERSION = 2
+ANALYST = "analyst"
+MAX_AUDIT_IN_REPORT = 300
 
 
 class AlertContext(BaseModel):
@@ -44,6 +56,29 @@ class Verdict(BaseModel):
     evidence_ids: list[str]
 
 
+class AnalystMessage(BaseModel):
+    at: datetime
+    mode: str
+    kind: str
+    target_role: str | None
+    text: str
+
+
+class AgentAssessment(BaseModel):
+    """The verifier's latest assessment. Advisory; the verdict above is the analyst's."""
+
+    run_id: str
+    model: str
+    finished_at: datetime | None
+    disposition: str
+    confidence: str
+    rationale: str
+    supporting_evidence_ids: list[str]
+    contradicting_evidence_ids: list[str]
+    gaps: list[str]
+    adjustments: list[str]
+
+
 class InvestigationReport(BaseModel):
     schema_version: int = REPORT_SCHEMA_VERSION
     generated_at: datetime
@@ -60,8 +95,12 @@ class InvestigationReport(BaseModel):
     contradictions: list[Evidence]
     gaps: list[Evidence]
     verdict: Verdict | None
-    recommendations: list[dict[str, Any]] = Field(default_factory=list)
-    simulated_actions: list[dict[str, Any]] = Field(default_factory=list)
+    analyst_instructions: list[AnalystMessage] = Field(default_factory=list)
+    agent_assessment: AgentAssessment | None = None
+    recommendations: list[Recommendation] = Field(default_factory=list)
+    simulated_actions: list[Recommendation] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    audit_trail: list[AuditEvent] = Field(default_factory=list)
     limitations: list[str]
 
 
@@ -82,6 +121,10 @@ def build_report(
             reasoning=investigation.disposition_reason or "",
             evidence_ids=investigation.disposition_evidence_ids,
         )
+    conn = service.conn
+    recommendations = RecommendationRepository(conn).for_investigation(investigation_id)
+    gaps = [e for e in evidence if e.category is EvidenceCategory.MISSING_TELEMETRY]
+    assessment = _agent_assessment(AgentRunRepository(conn), investigation_id)
     return InvestigationReport(
         generated_at=generated_at,
         investigation_id=investigation.investigation_id,
@@ -95,10 +138,67 @@ def build_report(
         provider_findings=provider_findings,
         analyst_notes=[e for e in evidence if e.source_type is EvidenceSource.ANALYST],
         contradictions=[e for e in evidence if e.category is EvidenceCategory.CONTRADICTION],
-        gaps=[e for e in evidence if e.category is EvidenceCategory.MISSING_TELEMETRY],
+        gaps=gaps,
         verdict=verdict,
-        limitations=_limitations(service, investigation, provider_findings),
+        analyst_instructions=[
+            AnalystMessage(
+                at=m.created_at,
+                mode=m.mode.value,
+                kind=m.kind.value,
+                target_role=m.target_role.value if m.target_role else None,
+                text=m.content,
+            )
+            for m in ChatRepository(conn).for_investigation(investigation_id)
+            if m.author == ANALYST
+        ],
+        agent_assessment=assessment,
+        recommendations=recommendations,
+        simulated_actions=[
+            r for r in recommendations if r.status is RecommendationStatus.SIMULATED
+        ],
+        next_steps=_next_steps(investigation, recommendations, gaps),
+        audit_trail=AuditLog(conn).for_investigation(investigation_id, MAX_AUDIT_IN_REPORT),
+        limitations=_limitations(service, investigation, provider_findings, assessment),
     )
+
+
+def _agent_assessment(runs: AgentRunRepository, investigation_id: str) -> AgentAssessment | None:
+    for run in runs.for_investigation(investigation_id):
+        if run.status is AgentRunStatus.COMPLETED and run.assessment is not None:
+            a = run.assessment
+            return AgentAssessment(
+                run_id=run.run_id,
+                model=run.model,
+                finished_at=run.finished_at,
+                disposition=a.disposition.value,
+                confidence=a.confidence.value,
+                rationale=a.rationale,
+                supporting_evidence_ids=a.supporting_evidence_ids,
+                contradicting_evidence_ids=a.contradicting_evidence_ids,
+                gaps=a.gaps,
+                adjustments=a.adjustments,
+            )
+    return None
+
+
+def _next_steps(
+    investigation: Investigation, recommendations: list[Recommendation], gaps: list[Evidence]
+) -> list[str]:
+    """Derived from stored state only: undecided recommendations, then telemetry gaps."""
+    steps = []
+    for r in recommendations:
+        if r.status not in OPEN_RECOMMENDATION_STATUSES:
+            continue
+        if r.status is RecommendationStatus.PROPOSED and r.requires_approval:
+            verb = "Approve or reject"
+        else:
+            verb = "Simulate or reject"
+        steps.append(f"{verb} {r.action.value} on {r.target} ({r.recommendation_id}).")
+    for gap in gaps[:10]:
+        steps.append(f"Close the gap if the data exists: {gap.claim}")
+    if investigation.status is InvestigationStatus.OPEN:
+        steps.append("Record a disposition when the evidence is sufficient.")
+    return steps
 
 
 def _alert_context(
@@ -163,11 +263,25 @@ def _summary(
 
 
 def _limitations(
-    service: InvestigationService, investigation: Investigation, provider_findings: list[Evidence]
+    service: InvestigationService,
+    investigation: Investigation,
+    provider_findings: list[Evidence],
+    assessment: AgentAssessment | None,
 ) -> list[str]:
+    ai_used = assessment is not None or any(
+        e.source_type is EvidenceSource.AGENT
+        for e in service.evidence(investigation.investigation_id)
+    )
     items = [
-        "Built deterministically from data stored in this app; no AI analysis was used "
-        "(agents arrive in Phase 5).",
+        "Built deterministically from data stored in this app."
+        + (
+            " Agent-written evidence and the agent assessment come from a local language "
+            "model; check them against the cited events."
+            if ai_used
+            else " No AI analysis was recorded for this investigation."
+        ),
+        "Response actions are simulations only: this app has no firewall, EDR or identity "
+        "integration, and nothing outside it was changed.",
         "Only telemetry loaded into this app was examined; absence of events is not proof "
         "that nothing happened.",
         "Confidence is a qualitative analyst judgement, not a calibrated probability.",
@@ -206,6 +320,10 @@ def _table(headers: list[str], rows: list[list[Any]]) -> list[str]:
     lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     lines += ["| " + " | ".join(md(cell) for cell in row) + " |" for row in rows]
     return lines
+
+
+def _ids(ids: list[str]) -> str:
+    return ", ".join(f"`{md(i)}`" for i in ids) or "none"
 
 
 def _evidence_rows(items: list[Evidence]) -> list[list[Any]]:
@@ -286,6 +404,31 @@ def to_markdown(report: InvestigationReport) -> str:
                 f"status {md(e.provenance.get('status', 'local'))}"
                 for e in items
             ]
+    out += ["", "## Analyst instructions", ""]
+    if report.analyst_instructions:
+        out += _table(
+            ["time", "mode", "kind", "to", "message"],
+            [
+                [_ts(m.at), m.mode, m.kind, m.target_role or "orchestrator", m.text]
+                for m in report.analyst_instructions
+            ],
+        )
+    else:
+        out.append("No analyst messages.")
+    out += ["", "## Agent assessment (advisory)", ""]
+    if report.agent_assessment:
+        a = report.agent_assessment
+        out += [
+            f"- Run `{a.run_id}` ({md(a.model)}), finished {_ts(a.finished_at)}",
+            f"- Disposition: {a.disposition}, confidence {a.confidence}",
+            f"- Rationale: {md(a.rationale)}",
+            f"- Supporting: {_ids(a.supporting_evidence_ids)}",
+            f"- Contradicting: {_ids(a.contradicting_evidence_ids)}",
+        ]
+        out += [f"- Gap: {md(g)}" for g in a.gaps]
+        out += [f"- Adjusted by checks: {md(item)}" for item in a.adjustments]
+    else:
+        out.append("No completed agent assessment.")
     out += ["", "## Verdict", ""]
     if report.verdict:
         v = report.verdict
@@ -297,11 +440,66 @@ def to_markdown(report: InvestigationReport) -> str:
         ]
     else:
         out.append("No disposition recorded yet.")
+    out += ["", "## Recommendations and simulated actions", ""]
+    out.append(
+        "All response actions are simulated; nothing outside this app is changed. Status "
+        "and policy notes are set by code, not by the model."
+    )
+    out.append("")
+    if report.recommendations:
+        out += _table(
+            [
+                "id",
+                "action",
+                "target",
+                "risk",
+                "reversible",
+                "status",
+                "proposed by",
+                "rationale",
+                "evidence",
+                "policy",
+            ],
+            [
+                [
+                    r.recommendation_id,
+                    r.action.value,
+                    r.target,
+                    r.risk.value,
+                    "yes" if r.reversible else "no",
+                    r.status.value,
+                    r.proposed_by,
+                    r.rationale,
+                    ", ".join(r.evidence_ids),
+                    " ".join(r.policy_notes),
+                ]
+                for r in report.recommendations
+            ],
+        )
+    else:
+        out.append("No recommendations.")
+    if report.simulated_actions:
+        out += ["", "### Simulated actions", ""]
+        for r in report.simulated_actions:
+            sim = r.simulation or {}
+            out.append(
+                f"- `{r.recommendation_id}` {_ts(r.simulated_at)}: {md(sim.get('would', ''))} "
+                f"Executed: no. Undo: {md(sim.get('undo', ''))}"
+            )
+    out += ["", "## Next steps", ""]
+    out += [f"- {md(step)}" for step in report.next_steps] or ["None."]
+    out += ["", "## Audit trail", ""]
+    if report.audit_trail:
+        out += _table(
+            ["time", "actor", "action", "target", "outcome"],
+            [
+                [_ts(e.at), e.actor, e.action, f"{e.target_type}:{e.target_id}", e.outcome]
+                for e in report.audit_trail
+            ],
+        )
+    else:
+        out.append("No audit events.")
     out += [
-        "",
-        "## Recommendations and simulated actions",
-        "",
-        NOT_YET,
         "",
         "## Limitations",
         "",

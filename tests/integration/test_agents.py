@@ -173,7 +173,7 @@ def test_unknown_tools_wrong_roles_and_bad_arguments_are_refused(demo, holder):
             call("close_investigation", disposition="benign_or_expected"),
             call("search_events", user="dave"),  # log investigator only
             call("lookup_local_ioc", indicator="203.0.113.45", sql="DROP TABLE events"),
-            call("propose_response", action="block_ip"),  # not until Phase 7
+            call("propose_response", action="block_ip"),  # response planner only
             finish(),
             route("verifier"),
             verdict("insufficient_data", "low"),
@@ -187,7 +187,7 @@ def test_unknown_tools_wrong_roles_and_bad_arguments_are_refused(demo, holder):
     assert "unknown tool 'close_investigation'" in errors[0]
     assert "may not use search_events" in errors[1]
     assert "invalid arguments" in errors[2] and "sql" in errors[2]
-    assert "unknown tool 'propose_response'" in errors[3]
+    assert "threat_intel role may not use propose_response" in errors[3]
     # The refusal goes back to the model so it can correct itself.
     assert "unknown tool 'close_investigation'" in model.user_prompt(2)
     assert demo.events.count() == 136

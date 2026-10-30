@@ -11,6 +11,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Sequence
 
+from app.audit.log import AuditLog
 from app.detection.base import DetectionContext, Rule
 from app.detection.registry import default_rules
 from app.domain.enums import ALLOWED_TRANSITIONS, AlertStatus
@@ -29,6 +30,7 @@ class DetectionEngine:
         self.rules: dict[str, Rule] = {r.rule_id: r for r in (rules or default_rules())}
         self.rule_settings = RuleRepository(conn)
         self.alerts = AlertRepository(conn)
+        self.audit = AuditLog(conn)
         self.events = EventRepository(conn)
         self.ctx = DetectionContext(self.events, IocRepository(conn))
         self.rule_settings.sync(
@@ -84,7 +86,9 @@ class DetectionEngine:
                 out.append((rule, settings))
         return out
 
-    def configure(self, rule_id: str, *, enabled: bool, config: dict[str, int]) -> None:
+    def configure(
+        self, rule_id: str, *, enabled: bool, config: dict[str, int], actor: str = "analyst"
+    ) -> None:
         rule = self.rules.get(rule_id)
         if rule is None:
             raise NotFoundError(f"unknown rule: {rule_id}")
@@ -99,13 +103,27 @@ class DetectionEngine:
         current = self.rule_settings.get(rule_id)
         base = current.config if current else rule.default_config
         self.rule_settings.update(rule_id, enabled, {**base, **config})
+        self.audit.record(
+            actor,
+            "rule.configured",
+            "rule",
+            rule_id,
+            details={"enabled": enabled, "config": {**base, **config}},
+        )
 
     # --- alert lifecycle -------------------------------------------------------------------
 
-    def transition(self, alert_id: str, status: AlertStatus) -> None:
+    def transition(self, alert_id: str, status: AlertStatus, actor: str = "analyst") -> None:
         alert = self.alerts.get(alert_id)
         if alert is None:
             raise NotFoundError(f"unknown alert: {alert_id}")
         if status not in ALLOWED_TRANSITIONS[alert.status]:
             raise InvalidTransitionError(f"cannot move an alert from {alert.status} to {status}")
         self.alerts.set_status(alert_id, status)
+        self.audit.record(
+            actor,
+            "alert.status_changed",
+            "alert",
+            alert_id,
+            details={"from": alert.status.value, "to": status.value},
+        )

@@ -137,6 +137,7 @@ class AgentRole(StrEnum):
     LOG_INVESTIGATOR = "log_investigator"
     THREAT_INTEL = "threat_intel"
     VERIFIER = "verifier"
+    RESPONSE_PLANNER = "response_planner"  # proposes simulated responses; never part of a run
 
 
 SPECIALISTS: tuple[AgentRole, ...] = (AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL)
@@ -189,3 +190,36 @@ class ChatKind(StrEnum):
 
 # Analyst messages the agent graph acts on, in order, at its next step boundary.
 DIRECTIVE_KINDS = frozenset({ChatKind.INSTRUCTION, ChatKind.REDIRECT, ChatKind.REPLY})
+
+
+class ResponseAction(StrEnum):
+    """The only response actions that can be proposed. All are simulated: there is no firewall,
+    EDR or identity integration, and nothing outside this app is changed."""
+
+    BLOCK_IP = "block_ip"
+    ISOLATE_HOST = "isolate_host"
+    DISABLE_ACCOUNT = "disable_account"
+    RESET_CREDENTIALS = "reset_credentials"
+    REVOKE_SESSIONS = "revoke_sessions"
+    COLLECT_TRIAGE = "collect_triage"
+    WATCHLIST = "watchlist"
+    ESCALATE = "escalate"
+
+
+class RiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class RecommendationStatus(StrEnum):
+    PROPOSED = "proposed"  # awaiting the analyst (approval first if required)
+    APPROVED = "approved"  # approved; can be simulated
+    SIMULATED = "simulated"  # simulation recorded (final)
+    REJECTED = "rejected"  # the analyst declined it (final)
+    BLOCKED = "blocked"  # refused by policy when proposed (final); kept so it stays visible
+
+
+OPEN_RECOMMENDATION_STATUSES = frozenset(
+    {RecommendationStatus.PROPOSED, RecommendationStatus.APPROVED}
+)

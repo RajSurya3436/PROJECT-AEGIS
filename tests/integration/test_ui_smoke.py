@@ -6,7 +6,7 @@ from app.context import build_context
 from app.domain.enums import AlertStatus
 from app.ingestion.demo import ingest_demo
 from app.ingestion.iocs import load_demo_iocs
-from app.ui import alerts, dashboard, events, investigations, rules, settings, sources
+from app.ui import alerts, audit, dashboard, events, investigations, rules, settings, sources
 
 PAGES = (
     dashboard.render,
@@ -16,6 +16,7 @@ PAGES = (
     rules.render,
     settings.render,
     investigations.render,
+    audit.render,
 )
 
 
@@ -241,3 +242,56 @@ def test_agents_tab_controls_only_the_run_they_act_on(settings):
     assert not any(
         b.label in ("Stop run", "Pause run", "Resume from checkpoint") for b in at.button
     )
+
+
+def test_response_tab_plans_approves_and_simulates_and_audit_page_shows_it(settings):
+    from fixtures.agents import ScriptedModel, route, verdict
+
+    holder = {}
+    ctx = build_context(settings, ":memory:", model_factory=lambda _s: holder["model"])
+    load_demo_iocs(ctx.iocs)
+    ingest_demo(ctx.ingestion)
+    alert = next(a for a in ctx.alerts.list() if a.rule_id == "auth.failures_then_success")
+    inv = ctx.investigations.start_from_alert(alert.alert_id).investigation_id
+    ev = next(
+        e.evidence_id for e in ctx.investigations.evidence(inv) if e.source_type.value == "alert"
+    )
+    at = _run(investigations.render, ctx)
+    assert any("Run the agents first" in c.value for c in at.caption)
+
+    holder["model"] = ScriptedModel(
+        [route("verifier"), verdict("likely_malicious", "medium", supporting=[ev])]
+    )
+    ctx.agents.run_now(inv)
+    holder["model"] = ScriptedModel(
+        [
+            {
+                "summary": "Isolate the workstation.",
+                "proposals": [
+                    {
+                        "action": "isolate_host",
+                        "target": "WS-DAVE04",
+                        "rationale": "payload ran there",
+                        "evidence_ids": [ev],
+                    }
+                ],
+            }
+        ]
+    )
+    at = _run(investigations.render, ctx)
+    next(b for b in at.button if b.label == "Propose response with AI").click().run()
+    assert not at.exception
+    (rec,) = ctx.responses.list(inv)
+    assert rec.status.value == "proposed"
+    assert not any(b.label == "Simulate" for b in at.button)  # high impact: approve first
+    next(b for b in at.button if b.label == "Approve").click().run()
+    next(b for b in at.button if b.label == "Simulate").click().run()
+    assert not at.exception
+    assert ctx.responses.get(rec.recommendation_id).status.value == "simulated"
+
+    at = _run(audit.render, ctx)
+    assert not at.exception
+    at.selectbox[0].select("Response (proposals, approvals, simulations)").run()
+    assert not at.exception
+    table = at.dataframe[0].value
+    assert {"response.proposed", "response.approved", "response.simulated"} <= set(table["action"])

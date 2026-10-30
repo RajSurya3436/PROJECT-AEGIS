@@ -10,7 +10,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.context import AppContext, build_context
-from app.ui import alerts, dashboard, events, investigations, rules, settings, sources
+from app.ui import alerts, audit, dashboard, events, investigations, rules, settings, sources
 
 
 @st.cache_resource
@@ -31,6 +31,7 @@ def main() -> None:
         st.Page(lambda: sources.render(ctx), title="Data sources", url_path="sources"),
         st.Page(lambda: rules.render(ctx), title="Detection rules", url_path="rules"),
         st.Page(lambda: settings.render(ctx), title="Settings", url_path="settings"),
+        st.Page(lambda: audit.render(ctx), title="Audit log", url_path="audit"),
     ]
     st.navigation(pages).run()
 
