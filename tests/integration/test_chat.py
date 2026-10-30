@@ -133,6 +133,7 @@ def test_investigate_starts_a_run_with_the_chosen_specialist(demo, holder, inv):
         holder,
         call("search_events", user="dave"),
         finish("dave: 12 failures then success"),
+        finish("dave: 12 failures then success"),
         route("verifier"),
         verdict(),
     )
@@ -240,7 +241,7 @@ def test_pause_and_resume_from_the_chat(demo, holder, inv):
     with pytest.raises(InvestigationError, match="already open"):
         demo.chat.start(inv)  # the paused run still holds the investigation
 
-    _script(holder, finish("after pause"), route("verifier"), verdict())
+    _script(holder, finish("after pause"), finish("after pause"), route("verifier"), verdict())
     demo.chat.resume(inv)
     run = demo.agents.get(run.run_id)
     assert run.status is AgentRunStatus.COMPLETED and run.tool_calls == 1

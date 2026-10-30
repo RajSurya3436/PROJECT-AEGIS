@@ -38,6 +38,7 @@ from app.agents.schemas import (
 from app.agents.tools import (
     BuildTimelineArgs,
     ToolContext,
+    ToolOutcome,
     build_timeline,
     compact_evidence,
     execute,
@@ -120,6 +121,7 @@ class RunState(BaseModel):
     # comes back to the orchestrator, so several instructions are carried out in order.
     queued: list[dict[str, Any]] = Field(default_factory=list)
     awaiting_route: bool = False  # an untargeted instruction waits for the orchestrator
+    nudged: bool = False  # this turn was already reminded to record its findings
 
 
 class RunControls(Protocol):
@@ -270,7 +272,7 @@ class AgentGraph:
                 self._end_turn(state, "turn ended: redirected by the analyst")
             else:  # nothing was done yet: drop the turn without a note or using up a turn
                 state.node, state.role, state.instruction = "orchestrate", None, ""
-                state.turn, state.turn_steps = [], 0
+                state.turn, state.turn_steps, state.nudged = [], 0, False
         if interrupting:
             state.awaiting_route = False  # the newest instructions take over
 
@@ -285,7 +287,7 @@ class AgentGraph:
             state.bonus_turns = min(state.bonus_turns + 1, self.limits.max_specialist_turns)
         if target in (AgentRole.LOG_INVESTIGATOR, AgentRole.THREAT_INTEL):
             state.node, state.role, state.instruction = "specialist", target, item["text"]
-            state.turn, state.turn_steps = [], 0
+            state.turn, state.turn_steps, state.nudged = [], 0, False
         elif target is AgentRole.VERIFIER:
             state.node = "verify"
         else:
@@ -322,7 +324,7 @@ class AgentGraph:
             return
         state.node, state.role = "specialist", AgentRole(decision.next)
         state.instruction = decision.instruction or "Investigate the alert."
-        state.turn, state.turn_steps = [], 0
+        state.turn, state.turn_steps, state.nudged = [], 0, False
         self._log(
             run_id,
             AgentRole.ORCHESTRATOR,
@@ -353,11 +355,26 @@ class AgentGraph:
                 self._case_file(ctx, state, CASE_EVIDENCE),
                 prompts.data_block("instruction from the orchestrator", state.instruction),
                 self._turn_so_far(state),
+                # Outside the DATA blocks: an instruction from the system, not data.
+                *([prompts.RECORD_REMINDER] if state.nudged and self._unrecorded(state) else []),
                 f"Step {state.turn_steps + 1} of at most {self.limits.max_steps_per_turn}.",
             ]
         )
         action = self._call(run_id, role, system, user, state, SpecialistAction)
-        if action.action == "finish" or not action.tool:
+        finishing = action.action == "finish" or not action.tool
+        if finishing and not state.nudged and self._unrecorded(state):
+            # Small models often read events and finish without add_evidence, so the verifier
+            # has nothing new to check. Remind once per turn; a second finish is accepted.
+            state.nudged = True
+            self._log(
+                run_id,
+                role,
+                "nudge",
+                "finished without recording evidence; reminded once",
+                {"summary": action.summary},
+            )
+            return None
+        if finishing:
             self._log(
                 run_id,
                 role,
@@ -376,8 +393,17 @@ class AgentGraph:
             {"tool": action.tool, "arguments": action.arguments, "rationale": action.rationale},
         )
         started = self._clock()
-        outcome = execute(ctx, action.tool, action.arguments)
-        state.tool_calls += 1
+        if self._repeated(state, action.tool, action.arguments):
+            # Small models at temperature 0 can loop on one call. The result is already in the
+            # turn, so refuse without running it (still counts as a step, bounding the loop).
+            message = (
+                f"you already called {action.tool} with these arguments in this turn; its "
+                "result is above. Do something different or finish."
+            )
+            outcome = ToolOutcome(False, {"error": message}, message)
+        else:
+            outcome = execute(ctx, action.tool, action.arguments)
+            state.tool_calls += 1
         self._sync(ctx, state)
         self._log(
             run_id,
@@ -517,13 +543,30 @@ class AgentGraph:
             shown.append(entry)
         return prompts.data_block("your tool calls in this turn (oldest first)", shown)
 
+    @staticmethod
+    def _unrecorded(state: RunState) -> bool:
+        """True for a log investigator turn that saw events but recorded no evidence."""
+        if state.role is not AgentRole.LOG_INVESTIGATOR:
+            return False
+        ok = [step for step in state.turn if step["ok"]]
+        if any(step["tool"] == "add_evidence" for step in ok):
+            return False
+        return any(step["tool"] != "request_analyst_input" for step in ok)
+
+    @staticmethod
+    def _repeated(state: RunState, tool: str, arguments: Any) -> bool:
+        return any(
+            step["ok"] and step["tool"] == tool and step["arguments"] == arguments
+            for step in state.turn
+        )
+
     def _end_turn(self, state: RunState, summary: str) -> None:
         if state.role is not None:
             state.notes.append({"role": state.role.value, "summary": summary[:1_500]})
             state.notes = state.notes[-MAX_NOTES:]
         state.specialist_turns += 1
         state.node, state.role, state.instruction = "orchestrate", None, ""
-        state.turn, state.turn_steps = [], 0
+        state.turn, state.turn_steps, state.nudged = [], 0, False
 
     def _to_verifier(self, run_id: str, state: RunState, reason: str) -> None:
         if state.node == "verify":

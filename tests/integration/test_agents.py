@@ -329,10 +329,12 @@ def test_pause_then_resume_continues_from_the_checkpoint(demo, holder):
     assert run.status is AgentRunStatus.PAUSED and run.control is None
     assert run.checkpoint["node"] == "specialist" and run.checkpoint["turn_steps"] == 1
 
-    holder.model = ScriptedModel([finish("resumed"), route("verifier"), verdict()])
+    holder.model = ScriptedModel(
+        [finish("resumed"), finish("resumed"), route("verifier"), verdict()]
+    )
     run = demo.agents.execute(run.run_id)
     assert run.status is AgentRunStatus.COMPLETED
-    assert run.model_calls == 5 and run.tool_calls == 1
+    assert run.model_calls == 6 and run.tool_calls == 1  # includes the record reminder
     assert run.checkpoint["notes"][0]["summary"] == "resumed"
 
 
@@ -401,6 +403,7 @@ def test_reputation_tool_brings_searched_events_into_scope(demo, holder):
             route("log_investigator"),
             call("search_events", src_ip=ip, limit=3),
             finish(),
+            finish(),  # after the reminder to record evidence
             route("threat_intel"),
             call("lookup_virustotal_ip", ip=ip),
             finish(),
@@ -453,6 +456,7 @@ def test_prompt_injection_in_logs_stays_data(settings, holder):
             call("get_event", event_id=event_id),
             obey,
             finish(),
+            finish(),  # after the reminder to record evidence
             route("verifier"),
             verdict("benign_or_expected", "high"),
         ]
@@ -516,3 +520,71 @@ def test_runner_relaunches_a_run_launched_while_its_worker_winds_down():
     runner.launch("run-1")  # after the worker has left, a launch starts a new one
     runner.join("run-1", timeout=10)
     assert calls == ["run-1", "run-1", "run-1"]
+
+
+def test_log_investigator_is_reminded_once_to_record_findings(demo, holder):
+    def record_after_reminder(messages):
+        prompt = messages[-1].content
+        # The reminder is a system instruction, so it must sit outside every DATA block
+        # (the model is told to ignore instructions inside them).
+        assert "REMINDER: you tried to finish" in prompt.rsplit("<<<END DATA>>>", 1)[1]
+        event_id = json.loads(
+            prompt.split("your tool calls in this turn")[1]
+            .split("\n", 1)[1]
+            .rsplit("<<<END DATA>>>", 1)[0]
+        )[0]["result"]["events"][0]["event_id"]
+        return call(
+            "add_evidence", category="observation", claim="dave logged on", event_ids=[event_id]
+        )
+
+    def finish_without_reminder(messages):
+        assert "REMINDER" not in messages[-1].content  # shown only until something is recorded
+        return finish("recorded")
+
+    run, inv, _ = _run(
+        demo,
+        holder,
+        [
+            route("log_investigator"),
+            call("search_events", user="dave", limit=3),
+            finish("found dave's logons"),  # nothing recorded: reminded
+            record_after_reminder,
+            finish_without_reminder,  # accepted: evidence was recorded
+            route("log_investigator"),
+            call("search_events", user="dave", limit=3),
+            finish("nothing new"),  # reminded again: a new turn gets its own reminder
+            finish("nothing new"),  # a second finish is accepted
+            route("verifier"),
+            verdict(),
+        ],
+    )
+    assert run.status is AgentRunStatus.COMPLETED
+    steps = demo.agents.runs.steps(run.run_id)
+    assert [s.kind for s in steps].count("nudge") == 2
+    agent = [
+        e
+        for e in demo.investigations.evidence(inv.investigation_id)
+        if e.source_type is EvidenceSource.AGENT
+    ]
+    assert [e.claim for e in agent] == ["dave logged on"]
+    assert [n["summary"] for n in run.checkpoint["notes"]] == ["recorded", "nothing new"]
+
+
+def test_repeating_an_identical_call_in_a_turn_is_refused(demo, holder):
+    run, _, _ = _run(
+        demo,
+        holder,
+        [
+            route("threat_intel"),
+            call("lookup_local_ioc", indicator="203.0.113.80"),
+            call("lookup_local_ioc", indicator="203.0.113.80"),  # same call again: refused
+            call("lookup_local_ioc", indicator="203.0.113.45"),  # different arguments: runs
+            finish(),
+            route("verifier"),
+            verdict(),
+        ],
+    )
+    assert run.status is AgentRunStatus.COMPLETED
+    assert run.tool_calls == 2  # the refused repeat did not run
+    rejected = [s for s in demo.agents.runs.steps(run.run_id) if s.kind == "tool_rejected"]
+    assert len(rejected) == 1 and "already called lookup_local_ioc" in rejected[0].summary

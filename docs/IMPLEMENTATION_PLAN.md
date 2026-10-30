@@ -51,7 +51,7 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] Detection without Ollama
 - [x] Provider adapters, mocked tests (no network or keys needed; a guard fails any real call)
 - [x] Investigation, evidence provenance (agents add to it through `add_evidence`)
-- [x] Agents with real allowlisted tools (tested with a scripted model; real `qwen3:8b` not yet tried)
+- [x] Agents with real allowlisted tools (scripted-model tests; demo case run with real `qwen3:8b`)
 - [x] Chat / redirect / pause / resume / stop (prior evidence kept on redirect, tested)
 - [x] Verifier with inconclusive outcome (deterministic downgrades when evidence cannot carry a verdict)
 - [ ] Policy: simulation only
@@ -188,3 +188,27 @@ From `/code-review` of the Phase 6 commit; each has a test.
 - The step limit is checked before a run waits for the analyst.
 - Ask does not flag 32-hex strings (e.g. MD5s) that appeared in the data it was shown.
 - Instructions that arrive during the verifier's step get an automatic follow-up run.
+
+### First run with the real model (2026-10-30)
+
+`scripts/run_agent_demo.py` with `qwen3:8b` on the demo case: completed in 135 s (8 model
+calls, 3 tool calls), every reply valid JSON, no rejected tool calls, verdict
+`likely_malicious` (medium) citing only real evidence IDs. The model needs ~7.8 GB at 16k
+context, so with 8 GB VRAM part of it runs on the CPU. Two problems, fixed:
+
+- The log investigator read events and finished without `add_evidence`, so the run added no
+  agent evidence. Code now reminds a log investigator turn once (step kind `nudge`) when it
+  tries to finish after successful lookups without recording anything; a second finish is
+  accepted. The reminder is placed outside the DATA blocks (inside one, the model rightly
+  ignored it as data) and is shown only until something is recorded.
+- With the reminder showing, the model repeated the same `add_evidence` call. A tool call
+  identical to an earlier successful one in the same turn is now refused without running.
+- Ask filed brute-force signs under "evidence against compromise". The Ask prompt now asks
+  for labelled "For compromise:" / "Against compromise:" sections.
+
+After the fixes: completed in 202 s (10 model calls, 4 tool calls, one `nudge`), one agent
+observation citing 13 events, verdict `suspicious_inconclusive` (medium). Known limitation:
+Ask once called 203.0.113.45 an IOC (the IOC is 203.0.113.80); Ask checks IDs, not facts.
+
+Tests no longer depend on whether Ollama happens to be running (the UI health check is stubbed
+in `tests/conftest.py`).
