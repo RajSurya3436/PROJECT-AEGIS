@@ -37,7 +37,7 @@ phase; each phase ends with tests + lint and a review before the next starts.
   specialist selection, pause/resume/stop/redirect, blocking agent questions, truthful run
   statuses, one open run per investigation (see `docs/agents.md`)
 - [ ] 7 Response policy, simulation, audit, Markdown/JSON export
-- [ ] 8 Optional file tail + loopback HTTP receiver
+- [ ] 8 Optional file tail + loopback HTTP receiver, Wazuh integration (see below)
 - [ ] 9 Hardening, end-to-end tests, README, demo runbook
 
 ## Acceptance checklist (blueprint section 10)
@@ -212,3 +212,33 @@ Ask once called 203.0.113.45 an IOC (the IOC is 203.0.113.80); Ask checks IDs, n
 
 Tests no longer depend on whether Ollama happens to be running (the UI health check is stubbed
 in `tests/conftest.py`).
+
+## Phase 8 scope: live inputs and Wazuh (added 2026-10-30)
+
+Wazuh is not installed yet. Everything below must be buildable and testable without it, using
+recorded sample Wazuh JSON as fixtures; a real Wazuh install is only needed for the final check.
+
+- **File tail** (planned): follow a growing JSONL file, survive rotation/truncation, remember the
+  read offset across restarts, feed `IngestionService` like every other source.
+- **Loopback HTTP receiver** (planned): local-only endpoint for pushed events, size and rate
+  limits, shared ingestion path.
+- **Wazuh field mapping**: map Wazuh alert JSON (`timestamp`, `agent.name`, `data.srcip`,
+  `data.dstuser`/`data.srcuser`, `rule.id`/`rule.level`/`rule.description`/`rule.groups`,
+  `full_log`, ...) to the canonical event model; unknown fields kept in `extra`, raw record
+  always kept.
+- **Wazuh as a source**:
+  - A. Tail `/var/ossec/logs/alerts/alerts.json` (first target; uses the file tail).
+  - B. Wazuh integration (`integratord`) posting alerts to the receiver. Wazuh's manager runs on
+    Linux, so on this laptop it would be in Docker or WSL and reach the receiver over a
+    non-loopback address: needs a token, an allowlisted source address and an ADR before the
+    receiver may bind beyond loopback.
+  - C. Optional: poll the Wazuh indexer (OpenSearch) API for new alerts when Wazuh is remote.
+- **Wazuh alerts vs. our rules**: decide (ADR) whether Wazuh alerts become alerts here directly
+  (keeping Wazuh's rule id and level mapped to severity) and/or are stored as events for our
+  rules and agent searches. Optional: ingest `archives.json` (raw events) so our five rules and
+  the agents see the underlying logon/process/network activity.
+- **Setup guide**: install Wazuh (single-node Docker) on this laptop, enrol the Windows host as
+  an agent, point the app at the alert file, run an end-to-end check.
+- Other SIEMs (Elastic/Security Onion via API, Splunk via HTTP forwarding, Graylog via file or
+  HTTP) reuse the same file/HTTP/poll paths; only their field mappings differ. Not in scope
+  unless asked.
