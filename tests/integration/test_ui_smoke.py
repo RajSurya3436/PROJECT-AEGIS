@@ -295,3 +295,20 @@ def test_response_tab_plans_approves_and_simulates_and_audit_page_shows_it(setti
     assert not at.exception
     table = at.dataframe[0].value
     assert {"response.proposed", "response.approved", "response.simulated"} <= set(table["action"])
+
+
+def test_sources_page_follows_a_wazuh_file_and_polls(ctx, tmp_path):
+    from app.config import PROJECT_ROOT
+
+    sample = PROJECT_ROOT / "data" / "samples" / "wazuh_alerts.jsonl"
+    alerts_json = tmp_path / "alerts.json"
+    alerts_json.write_bytes(sample.read_bytes())
+    at = _run(sources.render, ctx)
+    assert not at.exception
+    at.text_input[0].input(str(alerts_json))
+    next(b for b in at.button if b.label == "Follow this file").click().run()
+    assert not at.exception and any("Following" in s.value for s in at.success)
+    next(b for b in at.button if b.label == "Poll now").click().run()
+    assert not at.exception
+    assert any("17 new event(s)" in s.value for s in at.success)
+    assert ctx.alerts.count() == 6  # no IOC list loaded here, so no IOC alert

@@ -11,6 +11,7 @@ from app.config import Settings
 from app.domain.enums import EventType, InputFormat, SourceType
 from app.domain.errors import IngestLimitError, NormalizationError
 from app.domain.models import IngestResult, ParseErrorRecord
+from app.ingestion.adapters import RecordAdapter, get_adapter
 from app.ingestion.normalizer import canonical_json, flatten, map_fields, normalize_record
 from app.ingestion.parsers import RawRecord, decode_bytes, parse_text, safe_snippet
 from app.ingestion.service import IngestionService
@@ -43,12 +44,14 @@ def preview_upload(
     *,
     default_event_type: EventType | None = None,
     max_rows: int = PREVIEW_ROWS,
+    adapter: RecordAdapter | None = None,
 ) -> UploadPreview:
     """Parse and normalize the first ``max_rows`` records without persisting anything."""
     if len(content) > settings.max_upload_bytes:
         raise IngestLimitError(
             f"file is {len(content):,} bytes; limit is {settings.max_upload_bytes:,}"
         )
+    adapter = adapter or get_adapter(None)
     preview = UploadPreview(fmt=fmt)
     columns: dict[str, None] = {}
     mapping: dict[str, str] = {}
@@ -61,11 +64,11 @@ def preview_upload(
         if isinstance(item, ParseErrorRecord):
             preview.errors.append(item)
             continue
-        flat = flatten(item.data)
+        flat = flatten(adapter.transform(item.data))
         columns.update(dict.fromkeys(flat))
         _, _, chosen = map_fields(flat)
         mapping.update(chosen)
-        _preview_row(item, preview, default_event_type, settings)
+        _preview_row(item, preview, default_event_type, settings, adapter)
     preview.columns = list(columns)
     preview.mapping = mapping
     preview.unmapped = [c for c in columns if c not in mapping]
@@ -77,15 +80,16 @@ def _preview_row(
     preview: UploadPreview,
     default_event_type: EventType | None,
     settings: Settings,
+    adapter: RecordAdapter,
 ) -> None:
     try:
         event = normalize_record(
-            item.data,
+            adapter.transform(item.data),
             source_id="preview",
             locator=item.locator,
             default_event_type=default_event_type,
         )
-    except (NormalizationError, ValueError) as exc:
+    except (NormalizationError, ValueError, TypeError) as exc:
         preview.errors.append(
             ParseErrorRecord(
                 source_id="preview",
@@ -111,6 +115,7 @@ def ingest_upload(
     fmt: InputFormat,
     *,
     default_event_type: EventType | None = None,
+    adapter: RecordAdapter | None = None,
 ) -> IngestResult:
     return service.ingest_bytes(
         content,
@@ -119,4 +124,5 @@ def ingest_upload(
         source_type=SourceType.UPLOAD,
         source_name=filename,
         default_event_type=default_event_type,
+        adapter=adapter,
     )

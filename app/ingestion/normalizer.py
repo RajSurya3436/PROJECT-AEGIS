@@ -139,7 +139,11 @@ def normalize_record(
     locator: str,
     ingest_time: datetime | None = None,
     default_event_type: EventType | None = None,
+    received: dict[str, Any] | None = None,
 ) -> NormalizedEvent:
+    """``raw`` is what the aliases are applied to. When an adapter has reshaped a vendor
+    record first, ``received`` is the record as it arrived: it is what gets stored and what the
+    event ID is derived from, so the same vendor record always gives the same event."""
     flat = flatten(raw)
     mapped, extra, _ = map_fields(flat)
     invalid: dict[str, Any] = {}
@@ -197,7 +201,7 @@ def normalize_record(
         extra["_invalid_fields"] = invalid
 
     return NormalizedEvent(
-        event_id=stable_event_id(source_id, raw, mapped.get("source_event_id")),
+        event_id=stable_event_id(source_id, received or raw, mapped.get("source_event_id")),
         source_id=source_id,
         source_locator=locator,
         event_time=event_time,
@@ -205,7 +209,7 @@ def normalize_record(
         event_type=event_type,
         outcome=outcome,
         extra=extra,
-        raw=raw,
+        raw=received or raw,
         parse_status="partial" if invalid else "ok",
         **fields,
     )

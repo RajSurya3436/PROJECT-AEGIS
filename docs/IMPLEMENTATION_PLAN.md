@@ -39,15 +39,18 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] **7 Response policy, simulation, audit**: eight-action catalogue, deterministic policy gate,
   approve/reject/simulate (simulation only), AI response planner via `propose_response`,
   append-only audit log and page, report schema 2 (see `docs/response-and-audit.md`)
-- [ ] 8 Optional file tail + loopback HTTP receiver, Wazuh integration (see below)
-- [ ] 9 Hardening, end-to-end tests, README, demo runbook
+- [x] **8 Live inputs and Wazuh**: record adapters (generic, Wazuh), JSONL file tail with
+  rotation/truncation/restart handling, loopback-only HTTP receiver, `siem.high_severity_alert`
+  rule, Wazuh sample data (see `docs/live-inputs.md`)
+- [ ] 9 Evaluation set (5-10 mixed scenarios incl. benign, ground-truth verdicts, verdict
+  agreement and time per alert), hardening, end-to-end tests, README, demo runbook
 
 ## Acceptance checklist (blueprint section 10)
 
 - [~] Clean install documented and repeatable (documented; not yet tried on a second machine)
 - [~] JSONL/NDJSON/CSV import, mapping preview, quarantine (done; also JSON)
-- [~] Replay/upload/file-tail/HTTP share one ingestion path (upload, demo and replay share it and
-  detection; file tail and HTTP pending)
+- [x] Replay/upload/file-tail/HTTP share one ingestion path (all four use `IngestionService`
+  and detection; tested)
 - [x] Replay pause/resume/restart avoids duplicates (tested: a restart inserts 0 events and adds 0 alerts)
 - [x] Deterministic alerts with event links (same dataset gives the same 5 alerts, tested)
 - [x] Detection without Ollama
@@ -234,6 +237,24 @@ in `tests/conftest.py`).
   low-impact watchlist entries (30 s, valid on the first try), which were simulated.
 - Not done on purpose: a configurable list of protected entities (e.g. domain controllers),
   more than eight actions, multi-analyst identities (every UI actor is `analyst`).
+
+## Phase 8 design notes
+
+- Built as scoped below (options A and the receiver; option C, indexer polling, skipped).
+  Design: ADR 0004; details: `docs/live-inputs.md`.
+- `app/ingestion/adapters/` (generic, wazuh), `file_tail.py` (`FileTailer`, `TailManager`),
+  `http_receiver.py`, `app/detection/siem_rules.py`, `app/ui/live_inputs.py`,
+  `scripts/make_wazuh_sample.py` -> `data/samples/wazuh_alerts.jsonl`.
+- `normalize_record(received=...)`: adapted data drives the mapping; the record as received
+  is stored and fingerprinted.
+- The file tail fingerprints the first line, so truncation (same first line, shorter file)
+  and rotation (different first line) are told apart. Live inputs ingest on their own
+  connection with a file database. Followed files restart with the app.
+- The receiver drains rejected bodies (up to 16 MB) before answering, so senders read the
+  error instead of a connection reset.
+- Checked with real `curl.exe` against the receiver: 17 sample alerts -> 7 alerts.
+- Not done on purpose: Wazuh indexer/API polling, non-loopback receiver, `DOMAIN\user`
+  normalisation (Sysmon users stay as Wazuh wrote them; host correlation links them).
 
 ## Phase 8 scope: live inputs and Wazuh (added 2026-10-30)
 

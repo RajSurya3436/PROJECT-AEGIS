@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     max_rows_per_ingest: int = Field(default=200_000, gt=0)
     parse_error_snippet_chars: int = Field(default=500, gt=0)
 
+    # File tail (Phase 8): how often followed files are read, and per-read caps.
+    file_tail_poll_seconds: float = Field(default=2.0, ge=0.2, le=300)
+    file_tail_max_bytes_per_poll: int = Field(default=4 * 1024 * 1024, ge=4_096)
+    file_tail_max_line_bytes: int = Field(default=1024 * 1024, ge=1_024)
+
+    # Local HTTP receiver (Phase 8). It only ever binds to a loopback address.
+    http_receiver_host: str = "127.0.0.1"
+    http_receiver_port: int = Field(default=8787, ge=0, le=65535)
+    http_receiver_token: SecretStr | None = None  # if set, requests need "Bearer <token>"
+    http_receiver_max_body_bytes: int = Field(default=1024 * 1024, ge=1_024, le=50 * 1024 * 1024)
+    http_receiver_max_records: int = Field(default=1_000, gt=0, le=100_000)
+    http_receiver_requests_per_minute: int = Field(default=120, gt=0, le=10_000)
+
     @property
     def abuseipdb_configured(self) -> bool:
         return bool(self.abuseipdb_api_key and self.abuseipdb_api_key.get_secret_value())
