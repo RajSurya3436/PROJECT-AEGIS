@@ -3,7 +3,9 @@
 Modular monolith: one Python package (`app/`), one SQLite file, one Streamlit process.
 
 ```
-demo dataset / file upload   (file tail, HTTP receiver: later phases)
+demo dataset / file upload / file tail / loopback HTTP receiver
+            |
+     record adapter (generic, wazuh)  (app/ingestion/adapters/)
             |
      IngestionService  (app/ingestion/service.py)
             |
@@ -61,6 +63,10 @@ Replay (`app/ingestion/replay.py`) feeds `IngestionService` like any other sourc
 | `app/audit/`, `app/storage/audit.py` | append-only audit log written by the services |
 | `app/storage/responses.py` | recommendations (all SQL) |
 | `app/ui/response_panel.py`, `app/ui/audit.py` | Response tab, Audit log page |
+| `app/ingestion/adapters/` | record adapters: generic, Wazuh alerts.json |
+| `app/ingestion/file_tail.py`, `http_receiver.py` | live inputs: followed files, loopback receiver |
+| `app/detection/siem_rules.py` | `siem.high_severity_alert` over upstream SIEM levels |
+| `app/ui/live_inputs.py` | Live inputs on the Data sources page |
 
 ## Rules
 

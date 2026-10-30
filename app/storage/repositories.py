@@ -118,6 +118,13 @@ class DataSourceRepository:
             (status.value, error, source_id),
         )
 
+    def set_cursor(self, source_id: str, cursor: dict[str, Any]) -> None:
+        """Where a live source (file tail) has read up to; survives restarts."""
+        self.conn.execute(
+            "UPDATE data_sources SET cursor_json = ? WHERE source_id = ?",
+            (json.dumps(cursor, sort_keys=True), source_id),
+        )
+
     def record_ingest(self, source_id: str, inserted: int, quarantined: int) -> None:
         self.conn.execute(
             "UPDATE data_sources SET last_seen = ?, event_count = event_count + ?,"

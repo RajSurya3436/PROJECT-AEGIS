@@ -1,6 +1,7 @@
-"""The single ingestion path shared by upload, demo/replay, and (later) file tail and HTTP:
+"""The single ingestion path shared by upload, demo/replay, file tail and the HTTP receiver:
 
-parse -> validate/normalize -> deduplicate -> persist -> post-persist hooks -> source health
+parse -> (adapter) -> validate/normalize -> deduplicate -> persist -> post-persist hooks ->
+source health
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from app.config import Settings
 from app.domain.enums import EventType, InputFormat, SourceStatus, SourceType
 from app.domain.errors import IngestLimitError, NormalizationError
 from app.domain.models import IngestResult, NormalizedEvent, ParseErrorRecord
+from app.ingestion.adapters import RecordAdapter, get_adapter
 from app.ingestion.normalizer import canonical_json, normalize_record
 from app.ingestion.parsers import ParsedItem, RawRecord, decode_bytes, parse_text, safe_snippet
 from app.storage.repositories import DataSourceRepository, EventRepository, ParseErrorRepository
@@ -48,6 +50,7 @@ class IngestionService:
         source_type: SourceType,
         source_name: str,
         default_event_type: EventType | None = None,
+        adapter: RecordAdapter | None = None,
     ) -> IngestResult:
         if len(content) > self.settings.max_upload_bytes:
             raise IngestLimitError(
@@ -61,6 +64,7 @@ class IngestionService:
             source_type=source_type,
             source_name=source_name,
             default_event_type=default_event_type,
+            adapter=adapter,
         )
 
     def ingest_items(
@@ -71,7 +75,10 @@ class IngestionService:
         source_type: SourceType,
         source_name: str,
         default_event_type: EventType | None = None,
+        adapter: RecordAdapter | None = None,
     ) -> IngestResult:
+        adapter = adapter or get_adapter(None)
+        default_event_type = default_event_type or adapter.default_event_type
         self.sources.ensure(source_id, source_type, source_name)
         self.sources.set_status(source_id, SourceStatus.INGESTING)
         result = IngestResult(source_id=source_id)
@@ -88,7 +95,7 @@ class IngestionService:
                     errors.append(item)
                 else:
                     event_or_error = self._normalize(
-                        item, source_id, ingest_time, default_event_type
+                        item, source_id, ingest_time, default_event_type, adapter
                     )
                     if isinstance(event_or_error, ParseErrorRecord):
                         errors.append(event_or_error)
@@ -125,16 +132,19 @@ class IngestionService:
         source_id: str,
         ingest_time: datetime,
         default_event_type: EventType | None,
+        adapter: RecordAdapter,
     ) -> NormalizedEvent | ParseErrorRecord:
         try:
+            shaped = adapter.transform(record.data)
             return normalize_record(
-                record.data,
+                shaped,
                 source_id=source_id,
                 locator=record.locator,
                 ingest_time=ingest_time,
                 default_event_type=default_event_type,
+                received=None if shaped is record.data else record.data,
             )
-        except (NormalizationError, ValueError) as exc:
+        except (NormalizationError, ValueError, TypeError) as exc:
             return ParseErrorRecord(
                 source_id=source_id,
                 locator=record.locator,

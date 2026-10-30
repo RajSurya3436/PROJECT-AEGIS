@@ -5,11 +5,12 @@ import streamlit as st
 from app.context import AppContext
 from app.domain.enums import EventType, InputFormat
 from app.domain.errors import SocCopilotError
+from app.ingestion.adapters import ADAPTERS
 from app.ingestion.demo import ingest_demo
 from app.ingestion.iocs import load_demo_iocs
 from app.ingestion.parsers import detect_format
 from app.ingestion.upload import ingest_upload, preview_upload
-from app.ui import replay_panel
+from app.ui import live_inputs, replay_panel
 
 AUTO = "auto-detect"
 
@@ -49,6 +50,8 @@ def render(ctx: AppContext) -> None:
     )
     if upload is not None:
         _render_upload(ctx, upload.name, upload.getvalue())
+
+    live_inputs.render(ctx)
 
     st.subheader("Source health")
     sources = ctx.sources.list_all()
@@ -100,8 +103,18 @@ def _render_upload(ctx: AppContext, filename: str, content: bytes) -> None:
         ["(none)", *[t.value for t in EventType]],
     )
     default_type = None if type_choice == "(none)" else EventType(type_choice)
+    adapter = ADAPTERS[
+        st.selectbox(
+            "Record layout",
+            list(ADAPTERS),
+            format_func=lambda name: ADAPTERS[name].title,
+            help="Wazuh: an alerts.json export (one alert per line). Generic: field aliases.",
+        )
+    ]
     try:
-        preview = preview_upload(content, fmt, ctx.settings, default_event_type=default_type)
+        preview = preview_upload(
+            content, fmt, ctx.settings, default_event_type=default_type, adapter=adapter
+        )
     except SocCopilotError as exc:
         st.error(str(exc))
         return
@@ -124,7 +137,12 @@ def _render_upload(ctx: AppContext, filename: str, content: bytes) -> None:
     if st.button("Ingest file"):
         try:
             result = ingest_upload(
-                ctx.ingestion, filename, content, fmt, default_event_type=default_type
+                ctx.ingestion,
+                filename,
+                content,
+                fmt,
+                default_event_type=default_type,
+                adapter=adapter,
             )
         except SocCopilotError as exc:
             st.error(str(exc))

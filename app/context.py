@@ -12,6 +12,8 @@ from app.agents.service import AgentRunner, AgentService, ModelFactory, ollama_m
 from app.audit.log import AuditLog
 from app.config import Settings, get_settings
 from app.detection.engine import DetectionEngine
+from app.ingestion.file_tail import TailManager
+from app.ingestion.http_receiver import HttpReceiver
 from app.ingestion.iocs import load_demo_iocs
 from app.ingestion.replay import ReplayEngine, ReplayRunner, build_plan
 from app.ingestion.service import IngestionService
@@ -45,6 +47,8 @@ class AppContext:
     audit: AuditLog
     replay: ReplayRunner | None  # None for in-memory databases (a thread needs its own connection)
     agent_runner: AgentRunner | None  # None for in-memory databases; runs execute inline
+    tails: TailManager  # followed files; live polling only with a file database
+    receiver: HttpReceiver  # loopback HTTP receiver; started from the Data sources page
 
 
 def build_ingestion(
@@ -93,6 +97,13 @@ def build_context(
         agent_conn = open_database(database)
         return build_services(agent_conn, DetectionEngine(agent_conn))[2], agent_conn.close
 
+    def new_ingestion_session() -> tuple[IngestionService, sqlite3.Connection]:
+        """Live inputs ingest on their own connection (and thread) with a file database."""
+        if database == ":memory:":
+            return ingestion, conn
+        live_conn = open_database(database)
+        return build_ingestion(live_conn, settings)[0], live_conn
+
     reputation, investigations, agents = build_services(conn, detection)
     agent_runner = None
     if database != ":memory:":
@@ -103,6 +114,9 @@ def build_context(
     chat = ChatService(agents, agent_runner.launch if agent_runner else agents.execute)
     investigations.close_hooks.append(chat.on_investigation_closed)
     responses = ResponseService(investigations)
+    tails = TailManager(settings, new_ingestion_session, threaded=database != ":memory:")
+    if tails.threaded and tails.configs():
+        tails.start()  # files followed before the restart are followed again
     return AppContext(
         settings=settings,
         conn=conn,
@@ -122,4 +136,6 @@ def build_context(
         audit=AuditLog(conn),
         replay=None if database == ":memory:" else ReplayRunner(new_replay_engine),
         agent_runner=agent_runner,
+        tails=tails,
+        receiver=HttpReceiver(settings, new_ingestion_session),
     )

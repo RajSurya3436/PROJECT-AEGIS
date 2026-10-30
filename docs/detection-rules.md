@@ -14,6 +14,7 @@ matched (with a reason for each).
 | `auth.password_spray` | 1 | medium | failures for at least N distinct users from one source IP within a window | `distinct_users` 5, `window_seconds` 600 |
 | `process.suspicious_powershell` | 1 | high | PowerShell command line with an indicator (below) | `min_indicators` 1, `session_gap_seconds` 600 |
 | `network.local_ioc_match` | 1 | by IOC confidence (high, medium, else low) | a network event's `dst_ip` is in the local IOC list | `session_gap_seconds` 3600 |
+| `siem.high_severity_alert` | 1 | high from `high_level`, else medium | an upstream SIEM alert (e.g. Wazuh, `siem.rule_level`) at or above `min_level`; one alert per upstream alert | `min_level` 10, `high_level` 12 |
 
 All windows and gaps are inclusive: exactly `threshold` failures spanning exactly
 `window_seconds` fire, one second more does not.
