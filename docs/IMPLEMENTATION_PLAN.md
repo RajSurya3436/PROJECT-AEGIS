@@ -42,13 +42,16 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] **8 Live inputs and Wazuh**: record adapters (generic, Wazuh), JSONL file tail with
   rotation/truncation/restart handling, loopback-only HTTP receiver, `siem.high_severity_alert`
   rule, Wazuh sample data (see `docs/live-inputs.md`)
-- [ ] 9 Evaluation set (5-10 mixed scenarios incl. benign, ground-truth verdicts, verdict
-  agreement and time per alert), hardening, end-to-end tests, README, demo runbook
+- [x] **9 Evaluation and hardening**: seven ground-truth scenarios (malicious, benign,
+  undetermined) with detection and verdict grading and time per alert (2026-10-31 with
+  `qwen3:8b`: 7/7 detection, 4 correct, 3 cautious, 0 wrong), end-to-end demo-story test,
+  README quick start, demo runbook (see `docs/evaluation.md`, `docs/demo-runbook.md`)
 
 ## Acceptance checklist (blueprint section 10)
 
-- [~] Clean install documented and repeatable (documented; not yet tried on a second machine)
-- [~] JSONL/NDJSON/CSV import, mapping preview, quarantine (done; also JSON)
+- [x] Clean install documented and repeatable (2026-10-30: fresh venv, `pip install -e ".[dev]"`,
+  378 tests pass; a second physical machine has not been tried)
+- [x] JSONL/NDJSON/CSV import, mapping preview, quarantine (also JSON, and the Wazuh layout)
 - [x] Replay/upload/file-tail/HTTP share one ingestion path (all four use `IngestionService`
   and detection; tested)
 - [x] Replay pause/resume/restart avoids duplicates (tested: a restart inserts 0 events and adds 0 alerts)
@@ -63,7 +66,8 @@ phase; each phase ends with tests + lint and a review before the next starts.
 - [x] Audit log, Markdown/JSON reports (append-only audit, report schema 2 with audit trail)
 - [x] Prompt injection does not override policy (fenced data, allowlist, citation and verdict
   checks, response policy gate; tested with models that obey injected text)
-- [~] README: privacy, keys, provider limits, troubleshooting (present; demo steps pending)
+- [x] README: privacy, keys, provider limits, troubleshooting, quick start; demo steps in
+  `docs/demo-runbook.md`
 
 ## Phase 1 design notes
 

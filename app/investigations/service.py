@@ -365,6 +365,10 @@ class InvestigationService:
         if report.local_ioc is not None:
             added.append(self._ioc_evidence(investigation_id, ip, event_ids, actor))
         for result in report.results:
+            if result.status is ReputationStatus.SKIPPED:
+                # Private, documentation or invalid addresses are never sent to a provider.
+                # That is by design, not a gap in the data, so nothing is recorded.
+                continue
             added.append(self._reputation_evidence(investigation_id, result, event_ids, actor))
         return added
 

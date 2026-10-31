@@ -2,7 +2,7 @@
 # listed in README.md directly.
 PY ?= .venv/Scripts/python
 
-.PHONY: install test lint format run validate check-ollama demo-agents
+.PHONY: install test lint format run validate check-ollama demo-agents eval eval-detection
 
 install:
 	python -m venv .venv
@@ -30,3 +30,10 @@ check-ollama:
 # Whole demo story against the real local model (needs Ollama with the model pulled).
 demo-agents:
 	$(PY) scripts/run_agent_demo.py
+
+# Evaluation set: detection only (seconds), or with the local model (about 20-30 min).
+eval-detection:
+	$(PY) scripts/run_eval.py --detection-only
+
+eval:
+	$(PY) scripts/run_eval.py

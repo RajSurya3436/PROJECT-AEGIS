@@ -26,7 +26,13 @@ def row(seconds: int, **fields) -> dict:
     }
 
 
-def auth(seconds: int, outcome: str, user="dave", ip="203.0.113.45", **extra) -> dict:
+def auth(
+    seconds: int,
+    outcome: str,
+    user: str | None = "dave",
+    ip: str | None = "203.0.113.45",
+    **extra,
+) -> dict:
     data = {"event_type": "auth", "outcome": outcome, "host": "VPN-GW01", **extra}
     if user is not None:
         data["user"] = user
@@ -165,7 +171,14 @@ def test_one_user_many_failures_is_not_a_spray(ctx):
 # --- suspicious PowerShell -----------------------------------------------------------------
 
 
-def proc(seconds: int, command: str, name="powershell.exe", host="WS-DAVE04", user="dave", **x):
+def proc(
+    seconds: int,
+    command: str,
+    name="powershell.exe",
+    host: str | None = "WS-DAVE04",
+    user="dave",
+    **x,
+):
     data = {"event_type": "process", "process_name": name, "command_line": command, "host": host}
     if user:
         data["user"] = user
@@ -221,7 +234,7 @@ def test_close_powershell_events_share_one_alert(ctx):
 # --- local IOC -----------------------------------------------------------------------------
 
 
-def net(seconds: int, dst="203.0.113.80", host="WS-DAVE04", **x):
+def net(seconds: int, dst="203.0.113.80", host: str | None = "WS-DAVE04", **x):
     data = {"event_type": "network", "dst_ip": dst, "dst_port": 80, **x}
     if host:
         data["host"] = host
@@ -387,6 +400,7 @@ def test_rule_settings_survive_reopening_the_database(tmp_path, settings):
     first.conn.close()
     second = build_context(settings, path)
     stored = second.detection.rule_settings.get("auth.repeated_failures")
+    assert stored is not None
     assert not stored.enabled and stored.config["threshold"] == 9
 
 

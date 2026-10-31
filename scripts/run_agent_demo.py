@@ -39,7 +39,7 @@ def _clip(text: str, n: int = 400) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").strip().splitlines()[0])
     parser.add_argument("--rule", default="auth.failures_then_success")
     args = parser.parse_args()
 
@@ -124,7 +124,7 @@ def main() -> int:
         if rec.requires_approval:
             ctx.responses.approve(rec.recommendation_id, "analyst", "demo approval")
         done = ctx.responses.simulate(rec.recommendation_id, "analyst")
-        print(f"  simulated {done.action.value}: {done.simulation['would']}")
+        print(f"  simulated {done.action.value}: {(done.simulation or {}).get('would')}")
 
     report = to_markdown(build_report(ctx.investigations, inv, alert.last_seen))
     audit = ctx.audit.list(AuditFilters(investigation_id=inv), 2000)

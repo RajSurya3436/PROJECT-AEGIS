@@ -44,6 +44,7 @@ class LocalIocConnection(Rule):
         )
         findings: list[Finding] = []
         for dst_ip, client_field, client in scopes:
+            assert dst_ip and client  # guaranteed by the filter above
             ioc = iocs[dst_ip]
             history = ctx.events.query(
                 EventFilters(

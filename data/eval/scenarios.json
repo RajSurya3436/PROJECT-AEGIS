@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "s1_stolen_password_payload",
+      "title": "Guessed VPN password, then hidden PowerShell download",
+      "truth": "malicious",
+      "story": "maria's password was guessed from 203.0.113.77; minutes later her workstation ran hidden, encoded PowerShell that pulled a script from the IOC server and ran discovery commands.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "auth.failures_then_success": 1,
+        "auth.repeated_failures": 1,
+        "process.suspicious_powershell": 1,
+        "network.local_ioc_match": 1
+      },
+      "investigate": "auth.failures_then_success",
+      "file": "scenarios/s1_stolen_password_payload.jsonl"
+    },
+    {
+      "id": "s2_mistyped_password",
+      "title": "Three mistyped passwords at the user's own desk",
+      "truth": "benign",
+      "story": "tom mistyped his password three times on his own workstation at his usual time and IP, then read mail and opened Teams as on every other day.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "auth.failures_then_success": 1
+      },
+      "investigate": "auth.failures_then_success",
+      "file": "scenarios/s2_mistyped_password.jsonl"
+    },
+    {
+      "id": "s3_deployment_powershell",
+      "title": "Nightly software-deployment PowerShell",
+      "truth": "benign",
+      "story": "The deployment agent (ccmexec.exe) runs the same encoded update script as svc_deploy every night at 02:00 and reaches only the internal package share.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "process.suspicious_powershell": 6
+      },
+      "investigate": "process.suspicious_powershell",
+      "file": "scenarios/s3_deployment_powershell.jsonl"
+    },
+    {
+      "id": "s4_password_spray",
+      "title": "Password spray against eight accounts, no success",
+      "truth": "malicious",
+      "story": "198.51.100.66 tried one password against eight accounts within three minutes. No attempt succeeded: an attack, but no compromise.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "auth.password_spray": 1
+      },
+      "investigate": "auth.password_spray",
+      "file": "scenarios/s4_password_spray.jsonl"
+    },
+    {
+      "id": "s5_lone_ioc_hit",
+      "title": "One connection to a listed IOC, no endpoint telemetry",
+      "truth": "undetermined",
+      "story": "A lab machine connected once to a listed IOC. There are no process or logon events for it, so what made the connection cannot be known from this data.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "network.local_ioc_match": 1
+      },
+      "investigate": "network.local_ioc_match",
+      "file": "scenarios/s5_lone_ioc_hit.jsonl"
+    },
+    {
+      "id": "s6_wazuh_ssh_backdoor_user",
+      "title": "Wazuh: SSH brute force, login, then a UID 0 user created",
+      "truth": "malicious",
+      "story": "192.0.2.150 guessed deploy's SSH password on web-02 and created a root-level account 'sysupd' four minutes later (Wazuh alerts).",
+      "adapter": "wazuh",
+      "expected_alerts": {
+        "auth.failures_then_success": 1,
+        "auth.repeated_failures": 1,
+        "siem.high_severity_alert": 1
+      },
+      "investigate": "auth.failures_then_success",
+      "file": "scenarios/s6_wazuh_ssh_backdoor_user.jsonl"
+    },
+    {
+      "id": "s7_unfamiliar_ip_login",
+      "title": "Failures then success from an unfamiliar external IP, nothing after",
+      "truth": "undetermined",
+      "story": "lena usually connects from 198.51.100.20; this evening she failed four times from 192.0.2.44 and then got in. Travel and a new home router fit as well as a stolen password; nothing after the login tells them apart.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "auth.failures_then_success": 1
+      },
+      "investigate": "auth.failures_then_success",
+      "file": "scenarios/s7_unfamiliar_ip_login.jsonl"
+    }
+  ]
+}

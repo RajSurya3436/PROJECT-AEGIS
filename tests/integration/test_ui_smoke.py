@@ -121,7 +121,9 @@ def test_investigate_button_opens_investigation_and_workspace_renders(ctx):
     at = _run(investigations.render, ctx)
     assert not at.exception
     assert any(m.label == "Events in scope" and int(m.value) > 0 for m in at.metric)
-    assert {"Download Markdown", "Download JSON"} <= {b.label for b in at.get("download_button")}
+    assert {"Download Markdown", "Download JSON"} <= {
+        getattr(b, "label", None) for b in at.get("download_button")
+    }
 
     at.text_area[0].input("Repeated failures came from an IOC-listed address.")
     next(b for b in at.button if b.label == "Add evidence").click().run()
@@ -174,7 +176,8 @@ def test_agents_tab_runs_agents_and_accepts_the_assessment(settings):
         b for b in at.button if b.label == "Close investigation with this assessment"
     ).click().run()
     assert not at.exception
-    assert ctx.investigations.get(inv.investigation_id).disposition.value == "likely_malicious"
+    closed = ctx.investigations.get(inv.investigation_id)
+    assert closed.disposition and closed.disposition.value == "likely_malicious"
 
     at = _run(dashboard.render, ctx)
     assert not at.exception

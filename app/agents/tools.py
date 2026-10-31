@@ -38,6 +38,7 @@ from app.investigations.timeline import describe_event
 from app.policy.service import ResponseService
 from app.storage.repositories import EventFilters
 from app.tools.local_ioc import lookup_local_ioc
+from app.tools.reputation.base import classify_ip
 
 MAX_RESULT_CHARS = 8_000
 MAX_FIELD_CHARS = 200
@@ -405,10 +406,14 @@ def _reputation(provider: str) -> Handler:
             ctx.investigation_id, args.ip, ctx.actor, providers=[provider]
         )
         items = [compact_evidence(e) for e in recorded]
-        return (
-            {"ip": args.ip, "provider": provider, "recorded_evidence": items},
-            f"{provider}: {len(items)} evidence item(s) recorded",
-        )
+        result: dict[str, Any] = {"ip": args.ip, "provider": provider, "recorded_evidence": items}
+        _, scope = classify_ip(args.ip)
+        if scope != "public":
+            result["note"] = (
+                f"{args.ip} is a {scope.replace('_', '-')} address: it is never sent to "
+                "providers. This is not missing telemetry; judge it from the events."
+            )
+        return result, f"{provider}: {len(items)} evidence item(s) recorded"
 
     return handler
 

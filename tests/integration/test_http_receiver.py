@@ -3,8 +3,10 @@ from __future__ import annotations
 import http.client
 import json
 from collections.abc import Iterator
+from typing import Any, cast
 
 import pytest
+from fixtures.settings import make_settings
 
 from app.config import PROJECT_ROOT, Settings
 from app.context import build_context
@@ -22,7 +24,7 @@ EVENT = {
 
 
 def _settings(**overrides) -> Settings:
-    return Settings(_env_file=None, http_receiver_port=0, **overrides)
+    return make_settings(http_receiver_port=0, **overrides)
 
 
 @pytest.fixture
@@ -141,14 +143,14 @@ def test_bearer_token(tmp_path):
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.com", "::"])
 def test_only_loopback_binds_are_allowed(host):
     with pytest.raises(ReceiverError, match="loopback"):
-        HttpReceiver(_settings(http_receiver_host=host), lambda: (None, None))
+        HttpReceiver(_settings(http_receiver_host=host), lambda: cast(Any, (None, None)))
 
 
 def test_start_and_stop_are_audited(tmp_path):
     ctx = build_context(_settings(), str(tmp_path / "audit.db"))
     ctx.receiver.start()
     url = ctx.receiver.url
-    assert url.startswith("http://127.0.0.1:")
+    assert url and url.startswith("http://127.0.0.1:")
     ctx.receiver.stop()
     assert not ctx.receiver.running
     actions = [e.action for e in ctx.audit.list(AuditFilters(action_prefix="ingestion."))]

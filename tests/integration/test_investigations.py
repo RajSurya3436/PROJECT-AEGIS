@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 from fixtures.reputation import ABUSE_KEY, VT_KEY, RoutingTransport, abuse_body, vt_body
+from fixtures.settings import make_settings
 
-from app.config import Settings
 from app.context import build_context
 from app.domain.enums import (
     AlertStatus,
@@ -146,7 +147,7 @@ def test_expand_around_user_adds_events_and_preserves_existing(demo):
 
 
 def test_scope_cap_limits_related_events_but_keeps_alert_events():
-    ctx = build_context(Settings(_env_file=None, investigation_max_scope_events=15), ":memory:")
+    ctx = build_context(make_settings(investigation_max_scope_events=15), ":memory:")
     load_demo_iocs(ctx.iocs)
     ingest_demo(ctx.ingestion)
     inv = _start(ctx)  # this alert links 13 events
@@ -223,8 +224,7 @@ def test_reputation_evidence_records_provider_results_with_timestamps():
     transport = RoutingTransport(
         HttpResponse(200, abuse_body(score=90)), HttpResponse(200, vt_body(malicious=4))
     )
-    settings = Settings(
-        _env_file=None,
+    settings = make_settings(
         abuseipdb_api_key=ABUSE_KEY,
         virustotal_api_key=VT_KEY,
         enable_external_reputation=True,
@@ -253,11 +253,28 @@ def test_reputation_evidence_records_provider_results_with_timestamps():
     assert ABUSE_KEY not in to_json(report) and VT_KEY not in to_markdown(report)
 
 
-def test_reputation_without_keys_is_recorded_as_missing_telemetry(demo):
+def test_non_public_addresses_record_no_reputation_gap(demo):
+    """Documentation/private IPs are never sent out by design; that is not missing telemetry."""
     inv = _start(demo, "network.local_ioc_match")
     items = demo.investigations.check_reputation(inv.investigation_id, "203.0.113.80", "analyst")
-    by_source = {e.source_type for e in items}
-    assert EvidenceSource.LOCAL_IOC in by_source
-    gaps = [e for e in items if e.source_type is EvidenceSource.REPUTATION]
-    assert gaps and all(e.category is EvidenceCategory.MISSING_TELEMETRY for e in gaps)
-    assert all("skipped" in e.claim for e in gaps)
+    assert {e.source_type for e in items} == {EvidenceSource.LOCAL_IOC}
+
+
+def test_reputation_without_keys_is_recorded_as_missing_telemetry(ctx):
+    """A public IP with no provider keys: a real gap, so it is recorded."""
+    row = {
+        "timestamp": "2026-03-10T10:00:00Z",
+        "event_type": "network",
+        "host": "H1",
+        "src_ip": "10.0.0.5",
+        "dst_ip": "8.8.8.8",
+        "dst_port": 443,
+    }
+    ingest_upload(ctx.ingestion, "net.jsonl", json.dumps(row).encode(), InputFormat.JSONL)
+    event = ctx.events.query(EventFilters())[0]
+    inv_id = "inv-test-keys"
+    ctx.investigations.repo.create(inv_id, "t", "o")
+    ctx.investigations.repo.add_scope(inv_id, [event.event_id], "test", "analyst")
+    items = ctx.investigations.check_reputation(inv_id, "8.8.8.8", "analyst")
+    assert items and all(e.category is EvidenceCategory.MISSING_TELEMETRY for e in items)
+    assert all("not_configured" in e.claim for e in items)

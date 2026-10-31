@@ -5,8 +5,9 @@ import time
 from pathlib import Path
 
 import pytest
+from fixtures.settings import make_settings
 
-from app.config import PROJECT_ROOT, Settings
+from app.config import PROJECT_ROOT
 from app.context import build_context
 from app.domain.enums import SourceStatus
 from app.ingestion.file_tail import TailError, tail_source_id
@@ -89,7 +90,8 @@ def test_cursor_survives_a_restart(settings, tmp_path, log):
         while _count(second) < 3 and time.monotonic() < deadline:
             time.sleep(0.1)
         assert _count(second) == 3  # only the new line was added; nothing re-read twice
-        assert second.sources.get(tail_source_id(log)).event_count == 3
+        source = second.sources.get(tail_source_id(log))
+        assert source is not None and source.event_count == 3
     finally:
         second.tails.stop()
 
@@ -105,7 +107,7 @@ def test_start_at_end_skips_existing_lines_and_a_half_line(ctx, log):
 
 
 def test_bad_and_overlong_lines_are_quarantined_not_fatal(settings, tmp_path, log):
-    small = Settings(_env_file=None, file_tail_max_line_bytes=1_024)
+    small = make_settings(file_tail_max_line_bytes=1_024)
     ctx = build_context(small, ":memory:")
     ctx.tails.add(str(log))
     _append(log, b"not json\n" + b'"a string"\n' + b"x" * 3_000 + b"\n" + _line(0))
@@ -118,9 +120,7 @@ def test_bad_and_overlong_lines_are_quarantined_not_fatal(settings, tmp_path, lo
 
 
 def test_an_overlong_line_split_across_polls_is_skipped(settings, tmp_path, log):
-    small = Settings(
-        _env_file=None, file_tail_max_line_bytes=1_024, file_tail_max_bytes_per_poll=4_096
-    )
+    small = make_settings(file_tail_max_line_bytes=1_024, file_tail_max_bytes_per_poll=4_096)
     ctx = build_context(small, ":memory:")
     ctx.tails.add(str(log))
     _append(log, b"y" * 10_000 + b"\n" + _line(0))

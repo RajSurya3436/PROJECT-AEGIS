@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 from fixtures.agents import ScriptedModel, call, finish, route, verdict
+from fixtures.settings import make_settings
 
 from app.agents.llm import ModelUnavailableError
-from app.config import Settings
 from app.context import build_context
 from app.domain.enums import (
     AgentRole,
@@ -103,7 +103,7 @@ def test_verifier_answers_without_tools(demo, holder, inv):
 
 
 def test_ask_stops_looking_at_the_step_limit(demo, holder, inv):
-    demo.agents.settings = Settings(_env_file=None, agent_max_ask_steps=2)
+    demo.agents.settings = make_settings(agent_max_ask_steps=2)
     _script(holder, call("build_timeline"), call("build_timeline"))
     answer = demo.chat.ask(inv, "Everything about dave?")
     assert "could not finish looking within 2 steps" in answer.content
@@ -201,7 +201,7 @@ def test_redirect_mid_run_changes_course_and_keeps_evidence(demo, holder, inv):
 
 
 def test_redirect_after_the_turn_limit_still_gets_a_turn(demo, holder, inv):
-    demo.agents.settings = Settings(_env_file=None, agent_max_specialist_turns=1)
+    demo.agents.settings = make_settings(agent_max_specialist_turns=1)
 
     def redirect_now(_messages):
         demo.chat.redirect(inv, "one more look at the process tree")
@@ -360,7 +360,7 @@ def test_interrupted_run_resumes_from_the_chat(demo, holder, inv):
 
 
 def test_background_chat_run_and_restart_keeps_parked_runs(tmp_path, holder):
-    settings = Settings(_env_file=None, database_path=tmp_path / "soc.db")
+    settings = make_settings(database_path=tmp_path / "soc.db")
     ctx = build_context(settings, model_factory=lambda _s: holder.model)
     load_demo_iocs(ctx.iocs)
     ingest_demo(ctx.ingestion)
@@ -368,6 +368,7 @@ def test_background_chat_run_and_restart_keeps_parked_runs(tmp_path, holder):
     inv = ctx.investigations.start_from_alert(alert.alert_id).investigation_id
     _script(holder, route("log_investigator"), call("request_analyst_input", question="ok?"))
     run = ctx.chat.start(inv)
+    assert ctx.agent_runner is not None
     ctx.agent_runner.join(run.run_id, timeout=30)
     assert ctx.agents.get(run.run_id).status is AgentRunStatus.WAITING
 
@@ -375,6 +376,7 @@ def test_background_chat_run_and_restart_keeps_parked_runs(tmp_path, holder):
     assert again.agents.get(run.run_id).status is AgentRunStatus.WAITING  # not "interrupted"
     _script(holder, finish("thanks"), route("verifier"), verdict())
     again.chat.investigate(inv, "yes")
+    assert again.agent_runner is not None
     again.agent_runner.join(run.run_id, timeout=30)
     assert again.agents.get(run.run_id).status is AgentRunStatus.COMPLETED
 
@@ -460,7 +462,7 @@ def test_redirecting_a_turn_that_had_not_started_does_not_use_a_turn(demo, holde
 
 
 def test_bonus_turns_are_capped_and_not_granted_for_the_verifier(demo, holder, inv):
-    demo.agents.settings = Settings(_env_file=None, agent_max_specialist_turns=1)
+    demo.agents.settings = make_settings(agent_max_specialist_turns=1)
 
     def three(_messages):
         for _ in range(3):
@@ -488,7 +490,7 @@ def test_bonus_turns_are_capped_and_not_granted_for_the_verifier(demo, holder, i
 
 
 def test_a_question_on_the_last_step_does_not_buy_an_extra_step(demo, holder, inv):
-    demo.agents.settings = Settings(_env_file=None, agent_max_steps_per_turn=1)
+    demo.agents.settings = make_settings(agent_max_steps_per_turn=1)
     _script(holder, route("log_investigator"), call("request_analyst_input", question="VPN?"))
     run = demo.chat.start(inv)
     assert run.status is AgentRunStatus.WAITING

@@ -42,12 +42,14 @@ GAP = _ev("ev-gap", EvidenceCategory.MISSING_TELEMETRY, EvidenceSource.COVERAGE_
 
 
 def _report(disposition, confidence="medium", supporting=(), contradicting=()):
-    return VerifierReport(
-        disposition=disposition,
-        confidence=confidence,
-        rationale="r",
-        supporting_evidence_ids=list(supporting),
-        contradicting_evidence_ids=list(contradicting),
+    return VerifierReport.model_validate(
+        {
+            "disposition": disposition,
+            "confidence": confidence,
+            "rationale": "r",
+            "supporting_evidence_ids": list(supporting),
+            "contradicting_evidence_ids": list(contradicting),
+        }
     )
 
 

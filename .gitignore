@@ -29,3 +29,6 @@ data/exports/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Evaluation results (machine-specific)
+data/eval/results/

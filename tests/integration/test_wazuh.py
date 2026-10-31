@@ -45,6 +45,7 @@ def test_sample_is_current():
     spec = importlib.util.spec_from_file_location(
         "make_wazuh_sample", PROJECT_ROOT / "scripts" / "make_wazuh_sample.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     expected = "".join(json.dumps(r, sort_keys=True) + "\n" for r in module.build())
@@ -75,8 +76,9 @@ def test_sysmon_process_and_network_events():
     by_rule = {r["rule"]["id"]: r for r in _records()}
     proc = _normalize(by_rule["92057"])
     assert proc.event_type is EventType.PROCESS
-    assert proc.process_name.endswith("powershell.exe") and "-enc" in proc.command_line
-    assert proc.parent_process.endswith("explorer.exe")
+    assert proc.process_name and proc.process_name.endswith("powershell.exe")
+    assert proc.command_line and "-enc" in proc.command_line
+    assert proc.parent_process and proc.parent_process.endswith("explorer.exe")
     net = _normalize(by_rule["92101"])
     assert net.event_type is EventType.NETWORK
     assert (net.src_ip, net.dst_ip, net.dst_port) == ("10.10.0.31", "203.0.113.80", 443)
