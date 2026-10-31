@@ -95,6 +95,74 @@ Why the three remaining cases hedged (from the verifier's rationale):
 - **s3 deployment PowerShell**: it saw "encoded command" and stopped; it did not weigh the
   parent process (`ccmexec.exe`), the service account, or that the same command runs every night.
 
-Possible next improvements (not done): tell the log investigator to check other alerts on the
-same host/user before finishing, and tell the verifier that an attack attempt is malicious even
-without evidence of success.
+### Round 2: better evidence + "attack first" verifier (2026-10-31)
+
+Built from the round 1 diagnosis (traces of what the verifier was shown):
+
+- **Related activity as evidence** (`app/investigations/context.py`, deterministic): when an
+  investigation starts, other alerts on the same user/host/IP in the window, and upstream SIEM
+  detections at Wazuh level 7 or above (rule, level, MITRE IDs), are recorded as observations.
+  In s6 the verifier had the "new user added" event only as the 10th timeline line labelled
+  "other event"; it is now evidence: *Wazuh rule 5902 (level 8, MITRE T1136.001) … New user
+  added to the system*.
+- **"Seen before" history** over the 30 days before the alert: whether the user logged on from
+  this source before, whether this exact command ran on this host before, whether this client
+  connected to this address before. Alerts over many accounts get one summary line.
+- **Objective and verifier** reworded to separate "was there an attack?" from "did it succeed?"
+  (the specialists' notes in s4 framed everything as "compromise or not").
+
+| | Round 1 | Round 2 |
+|---|---|---|
+| Verdicts | 4 correct, 3 cautious, **0 wrong** | 4 correct, 0 cautious, **3 wrong** |
+| Wrong in detail | — | 2 false accusations (s2, s3), 1 overconfident (s7) |
+
+Fixes 1 and 2 worked (s4 and s6 became correct), but asking "is there attack activity?" first
+made the small model treat any rule pattern (typos then a success, encoded PowerShell) as an
+attack and ignore the history evidence that said "normal for this user". **Rejected.**
+
+### Round 3: "normal for this entity?" first
+
+The verifier now works through ordered steps: (1) normal for this entity, per the history
+evidence → benign; (2) attack → malicious, including failed attempts; (3) otherwise
+inconclusive.
+
+| Scenario | Truth | Round 3 verdict | Grade |
+|---|---|---|---|
+| s1_stolen_password_payload | malicious | likely_malicious | correct |
+| s2_mistyped_password | benign | suspicious_inconclusive | cautious |
+| s3_deployment_powershell | benign | suspicious_inconclusive | cautious |
+| s4_password_spray | malicious | benign_or_expected | **wrong (missed attack)** |
+| s5_lone_ioc_hit | undetermined | suspicious_inconclusive | correct |
+| s6_wazuh_ssh_backdoor_user | malicious | suspicious_inconclusive | cautious |
+| s7_unfamiliar_ip_login | undetermined | likely_malicious | **wrong (overconfident)** |
+
+Result: 2 correct, 3 cautious, **2 wrong** (1 missed attack, 1 overconfident); median 90 s per
+alert. The false accusations are gone, but s4 swung to a **missed attack**: step 1 was applied
+because one of the eight targeted accounts had logged on before, although the history line also
+said the spraying address had been used by none of them. s7 (unfamiliar address, nothing after
+the logon) was called malicious although the prompt's example requires suspicious activity
+*after* such a logon. **Not acceptable.**
+
+| | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Correct / cautious / wrong | 4 / 3 / **0** | 4 / 0 / 3 | 2 / 3 / 2 |
+| Kept? | **yes (best so far)** | no | no |
+
+### Round 4: labelled history (implemented; real-model evaluation pending)
+
+Each history line now starts with a label computed by code about the alert's own source,
+command or connection — **[seen before]**, **[first seen]** or **[no baseline]** — and the
+verifier may only call activity routine on a [seen before] line. The labels per scenario are
+pinned by tests (s2, s3 seen before; s1, s4, s5, s7 first seen; s6 no baseline). The code in
+the repository is this version; its verdict agreement has **not been measured yet**. Run
+`scripts/run_eval.py` and record the result here. Keep it only if it has 0 wrong; otherwise
+return to the round 1 verifier wording, keeping the evidence improvements (related alerts,
+SIEM detections, labelled history), which are deterministic and useful to analysts either way.
+Watch s7 in particular: round 3 called it malicious with nothing following the logon.
+
+### Caveats
+
+- These fixes were designed from failures on the same seven scenarios, so improved numbers are
+  optimistic. A fair test needs new scenarios the fixes were not shaped on.
+- One run per scenario; a local 8B model is not deterministic, so a single verdict can flip
+  between runs.

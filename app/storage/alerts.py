@@ -252,6 +252,21 @@ class AlertRepository:
         ).fetchall()
         return [self._row(r) for r in rows]
 
+    def links_for_events(self, event_ids: list[str]) -> dict[str, list[str]]:
+        """alert_id -> the given events it is linked to (batched; for related-alert checks)."""
+        links: dict[str, list[str]] = {}
+        for start in range(0, len(event_ids), 500):
+            chunk = event_ids[start : start + 500]
+            marks = ",".join("?" * len(chunk))
+            rows = self.conn.execute(
+                f"SELECT alert_id, event_id FROM alert_events WHERE event_id IN ({marks})"  # noqa: S608
+                " ORDER BY alert_id, event_id",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                links.setdefault(row["alert_id"], []).append(row["event_id"])
+        return links
+
     def set_status(self, alert_id: str, status: AlertStatus) -> None:
         self.conn.execute(
             "UPDATE alerts SET status = ?, updated_at = ? WHERE alert_id = ?",

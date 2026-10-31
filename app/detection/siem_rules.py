@@ -47,6 +47,7 @@ class SiemHighSeverityAlert(Rule):
             vendor = str(event.extra.get("siem.vendor") or "siem")
             rule = str(event.extra.get("siem.rule_id") or "?")
             description = str(event.extra.get("siem.rule_description") or event.message or "")
+            description = description.rstrip(". ")
             mitre = event.extra.get("siem.mitre_ids") or []
             where = event.host or event.src_ip or "unknown host"
             mitre_text = f" MITRE: {', '.join(map(str, mitre))}." if mitre else ""

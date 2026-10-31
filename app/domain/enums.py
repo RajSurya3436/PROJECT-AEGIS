@@ -126,6 +126,7 @@ class EvidenceSource(StrEnum):
     LOCAL_IOC = "local_ioc"
     REPUTATION = "reputation"
     COVERAGE_CHECK = "coverage_check"
+    HISTORY = "history"  # "seen before" checks over earlier events, computed by code
     ANALYST = "analyst"
     AGENT = "agent"  # written by an agent through the add_evidence tool
 
