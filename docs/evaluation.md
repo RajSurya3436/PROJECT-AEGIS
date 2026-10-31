@@ -109,7 +109,7 @@ Built from the round 1 diagnosis (traces of what the verifier was shown):
   this source before, whether this exact command ran on this host before, whether this client
   connected to this address before. Alerts over many accounts get one summary line.
 - **Objective and verifier** reworded to separate "was there an attack?" from "did it succeed?"
-  (the specialists' notes in s4 framed everything as "compromise or not").
+  (the specialists' notes in s4 framed everything as "compromise or not"). Reverted in round 5.
 
 | | Round 1 | Round 2 |
 |---|---|---|
@@ -148,17 +148,54 @@ the logon) was called malicious although the prompt's example requires suspiciou
 | Correct / cautious / wrong | 4 / 3 / **0** | 4 / 0 / 3 | 2 / 3 / 2 |
 | Kept? | **yes (best so far)** | no | no |
 
-### Round 4: labelled history (implemented; real-model evaluation pending)
+### Round 4: labelled history
 
-Each history line now starts with a label computed by code about the alert's own source,
-command or connection — **[seen before]**, **[first seen]** or **[no baseline]** — and the
-verifier may only call activity routine on a [seen before] line. The labels per scenario are
-pinned by tests (s2, s3 seen before; s1, s4, s5, s7 first seen; s6 no baseline). The code in
-the repository is this version; its verdict agreement has **not been measured yet**. Run
-`scripts/run_eval.py` and record the result here. Keep it only if it has 0 wrong; otherwise
-return to the round 1 verifier wording, keeping the evidence improvements (related alerts,
-SIEM detections, labelled history), which are deterministic and useful to analysts either way.
-Watch s7 in particular: round 3 called it malicious with nothing following the logon.
+Each history line starts with a label computed by code about the alert's own source, command
+or connection — **[seen before]**, **[first seen]** or **[no baseline]** (pinned by tests:
+s2, s3 seen before; s1, s4, s5, s7 first seen; s6 no baseline) — and the round 3 verifier was
+told to call activity routine only on a [seen before] line.
+
+Result: 4 correct, 2 cautious, **1 wrong** (s5, a single connection to a listed IOC with no
+other evidence, called likely_malicious); median 77 s. The history fix worked (s2 benign and
+s4 malicious, both correct), but the run still had a wrong verdict. **Not kept.**
+
+### Round 5: round 1 verifier wording + the new evidence (kept)
+
+Rather than tune the prompt scenario by scenario (which would fit it to these seven cases), the
+rule fixed before round 4 was applied: keep the deterministic evidence improvements, return to
+the round 1 verifier wording and objective, and measure.
+
+| Scenario | Truth | Verdict | Grade |
+|---|---|---|---|
+| s1_stolen_password_payload | malicious | likely_malicious | correct |
+| s2_mistyped_password | benign | benign_or_expected | correct |
+| s3_deployment_powershell | benign | suspicious_inconclusive | cautious |
+| s4_password_spray | malicious | suspicious_inconclusive | cautious |
+| s5_lone_ioc_hit | undetermined | suspicious_inconclusive | correct |
+| s6_wazuh_ssh_backdoor_user | malicious | suspicious_inconclusive | cautious |
+| s7_unfamiliar_ip_login | undetermined | suspicious_inconclusive | correct |
+
+| | Round 1 | Round 2 | Round 3 | Round 4 | **Round 5** |
+|---|---|---|---|---|---|
+| Correct / cautious / wrong | 4 / 3 / 0 | 4 / 0 / 3 | 2 / 3 / 2 | 4 / 2 / 1 | **4 / 3 / 0** |
+| Median time per alert | 80 s | — | 90 s | 77 s | **74 s** |
+| Kept? | | no | no | no | **yes** |
+
+**What the repository contains now:** the round 1 verifier wording, plus related alerts, upstream
+SIEM detections and labelled "seen before" history as evidence. Verdicts match round 1 (57%
+agreement, no missed attacks, no false accusations, no overconfident calls) and analysts get the
+new evidence, which is computed by code and useful whatever the model concludes.
+
+**Lessons.** Every attempt to make the 8B verifier commit more often traded one wrong verdict for
+another: "attack first" caused false accusations, "normal first" caused a missed attack, and
+labelled history plus that ordering made it overconfident on a lone IOC hit. With this model,
+better evidence improved the investigators' work, but pushing the verifier to be more decisive
+made it less safe. The three remaining cautious verdicts (s3, s4, s6) are safe; an analyst
+reviews them.
+
+**Next, if this is taken further:** run each scenario three times and grade the majority (single
+runs of a local model vary: s5 was correct in rounds 1-3 and 5 with the same evidence); add new
+scenarios that none of these fixes were shaped on; try a larger local model on the verifier only.
 
 ### Caveats
 
