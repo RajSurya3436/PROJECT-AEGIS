@@ -1,0 +1,2 @@
+{"action": "allowed", "dst_ip": "203.0.113.80", "dst_port": 443, "event_id": "S5-0001", "event_type": "network", "host": "WS-LAB07", "protocol": "tcp", "src_ip": "10.30.9.17", "timestamp": "2026-04-06T14:22:00Z"}
+{"action": "allowed", "dst_ip": "10.30.0.53", "dst_port": 53, "event_id": "S5-0002", "event_type": "network", "host": "WS-LAB07", "protocol": "tcp", "src_ip": "10.30.9.17", "timestamp": "2026-04-06T14:25:00Z"}

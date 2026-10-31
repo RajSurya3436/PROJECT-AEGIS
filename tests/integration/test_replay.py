@@ -95,7 +95,9 @@ def test_delay_scales_with_speed_and_caps_idle_gaps(ctx):
     delays = []
     gaps = []
     for index in range(len(plan) - 1):
-        gaps.append((plan[index + 1].event_time - plan[index].event_time).total_seconds())
+        start, end = plan[index].event_time, plan[index + 1].event_time
+        assert start and end
+        gaps.append((end - start).total_seconds())
         delays.append(engine.step())
     for gap, delay in zip(gaps, delays, strict=True):
         assert delay == pytest.approx(min(max(gap, 0), 300) / 10)
@@ -227,6 +229,6 @@ def test_runner_reports_worker_errors(settings, tmp_path):
     runner = ReplayRunner(broken)
     runner.start(speed=None)
     failed = wait_for(runner, ReplayState.ERROR)
-    assert "disk on fire" in failed.error
+    assert failed.error and "disk on fire" in failed.error
     runner.start(speed=None)  # can be started again after an error
     wait_for(runner, ReplayState.ERROR)

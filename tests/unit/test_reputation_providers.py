@@ -68,7 +68,7 @@ def test_abuseipdb_success_sends_only_the_ip_and_keeps_key_in_header():
     assert result.status is ReputationStatus.FRESH
     assert result.found is True and result.signal == "high"
     assert result.summary["abuse_confidence_score"] == 90
-    assert result.expires_at > result.queried_at
+    assert result.expires_at and result.queried_at and result.expires_at > result.queried_at
     ((url, headers, timeout),) = transport.calls
     assert url == "https://api.abuseipdb.com/api/v2/check?ipAddress=8.8.8.8&maxAgeInDays=90"
     assert ABUSE_KEY not in url

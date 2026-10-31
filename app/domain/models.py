@@ -33,7 +33,8 @@ EVENT_SCHEMA_VERSION = 1
 
 
 def _require_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None or value.utcoffset().total_seconds() != 0:
+    offset = value.utcoffset()
+    if offset is None or offset.total_seconds() != 0:
         raise ValueError("timestamps must be timezone-aware UTC")
     return value
 

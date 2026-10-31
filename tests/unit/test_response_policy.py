@@ -137,4 +137,4 @@ def test_analyst_proposals_skip_the_assessment_but_need_an_observation():
 def test_simulation_never_executes():
     result = simulate(ResponseAction.BLOCK_IP, "203.0.113.45")
     assert result["executed"] is False and result["mode"] == "simulation"
-    assert "203.0.113.45" in result["would"]
+    assert "203.0.113.45" in str(result["would"])

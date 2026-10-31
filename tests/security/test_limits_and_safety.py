@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fixtures.settings import make_settings
 
-from app.config import PROJECT_ROOT, Settings
+from app.config import PROJECT_ROOT
 from app.domain.enums import InputFormat
 from app.domain.errors import IngestLimitError, InvalidFilterError, UnsupportedInputError
 from app.ingestion.upload import ingest_upload, preview_upload
@@ -13,7 +14,7 @@ from app.storage.repositories import EventFilters
 
 
 def test_oversized_upload_rejected_before_parsing(ctx):
-    ctx.ingestion.settings = Settings(_env_file=None, max_upload_bytes=100)
+    ctx.ingestion.settings = make_settings(max_upload_bytes=100)
     with pytest.raises(IngestLimitError):
         ingest_upload(ctx.ingestion, "big.jsonl", b"x" * 101, InputFormat.JSONL)
     with pytest.raises(IngestLimitError):
@@ -76,7 +77,7 @@ def test_env_example_contains_no_secrets():
 
 def test_api_keys_never_in_settings_repr(monkeypatch):
     monkeypatch.setenv("ABUSEIPDB_API_KEY", "super-secret-value")
-    s = Settings(_env_file=None)
+    s = make_settings()
     assert s.abuseipdb_configured
     assert "super-secret-value" not in repr(s) and "super-secret-value" not in str(s)
 
@@ -119,3 +120,18 @@ def test_agent_code_has_no_dynamic_execution():
                 assert (
                     not node.value.lstrip().upper().startswith(("SELECT ", "INSERT ", "UPDATE "))
                 ), path.name
+
+
+def test_streamlit_config_keeps_the_app_local_and_quiet():
+    """Streamlit's defaults bind to every interface, send usage statistics and show stack
+    traces; the project config must override all three."""
+    import tomllib
+
+    from app.config import PROJECT_ROOT
+
+    config = tomllib.loads((PROJECT_ROOT / ".streamlit" / "config.toml").read_text("utf-8"))
+    assert config["server"]["address"] == "127.0.0.1"
+    assert config["server"]["enableXsrfProtection"] is True
+    assert config["browser"]["gatherUsageStats"] is False
+    assert config["client"]["showErrorDetails"] == "none"
+    assert config["server"]["maxUploadSize"] * 1024 * 1024 <= 25 * 1024 * 1024

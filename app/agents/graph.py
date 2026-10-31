@@ -489,7 +489,7 @@ class AgentGraph:
             )
             raise
         state.invalid_outputs, state.last_rejection = 0, ""
-        if schema is RouteDecision or schema is VerifierReport:
+        if isinstance(parsed, (RouteDecision, VerifierReport)):
             self._log(
                 run_id,
                 role,

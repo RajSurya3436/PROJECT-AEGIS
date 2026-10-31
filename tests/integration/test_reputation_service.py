@@ -11,6 +11,7 @@ from fixtures.reputation import (
     abuse_body,
     vt_body,
 )
+from fixtures.settings import make_settings
 
 from app.config import Settings
 from app.context import build_context
@@ -33,9 +34,7 @@ class Clock:
 
 
 def _keyed(**overrides) -> Settings:
-    return Settings(
-        _env_file=None, abuseipdb_api_key=ABUSE_KEY, virustotal_api_key=VT_KEY, **overrides
-    )
+    return make_settings(abuseipdb_api_key=ABUSE_KEY, virustotal_api_key=VT_KEY, **overrides)
 
 
 def _service(settings, transport, clock=None, conn=None):

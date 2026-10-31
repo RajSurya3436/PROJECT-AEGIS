@@ -1,0 +1,21 @@
+# Read by `streamlit run` when started from the project folder. Overrides unsafe defaults.
+
+[server]
+# Streamlit's default is every network interface; this app holds security data, so only
+# this machine may connect.
+address = "127.0.0.1"
+port = 8501
+headless = true
+enableXsrfProtection = true
+enableCORS = true
+# Matches MAX_UPLOAD_BYTES (25 MB); the app enforces its own limit as well.
+maxUploadSize = 25
+
+[browser]
+# Streamlit sends usage statistics by default; this app promises nothing leaves the machine.
+gatherUsageStats = false
+
+[client]
+# Uncaught errors show a generic message, not a stack trace with file paths and values.
+showErrorDetails = "none"
+toolbarMode = "minimal"

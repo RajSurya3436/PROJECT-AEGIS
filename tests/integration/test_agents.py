@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import pytest
 from fixtures.agents import ScriptedModel, call, finish, route, verdict
+from fixtures.settings import make_settings
 
 from app.agents.llm import ModelError, ModelUnavailableError
-from app.config import Settings
 from app.context import build_context
 from app.domain.enums import (
     AgentRunStatus,
     Confidence,
     Disposition,
     EventType,
-    EvidenceCategory,
     EvidenceSource,
     InputFormat,
     InvestigationStatus,
@@ -52,7 +52,7 @@ def _investigation(ctx):
 def _run(ctx, holder, replies, **limits):
     holder.model = ScriptedModel(replies)
     if limits:
-        ctx.agents.settings = Settings(_env_file=None, **limits)
+        ctx.agents.settings = make_settings(**limits)
     inv = _investigation(ctx)
     return ctx.agents.run_now(inv.investigation_id), inv, holder.model
 
@@ -108,10 +108,15 @@ def test_full_run_collects_evidence_and_verifies(demo, holder):
     assert "Model-generated" in agent[0].reliability
     # The cited process event was not in the baseline scope; citing it brought it in.
     assert process[1].event_id in demo.investigations.repo.scope_ids(inv.investigation_id)
-    # The documentation-range IP was never sent out; the skip is recorded as a gap.
-    abuse = [e for e in evidence if e.source_ref == "abuseipdb:203.0.113.45"]
-    assert abuse and abuse[0].category is EvidenceCategory.MISSING_TELEMETRY
-    assert abuse[0].collected_by == "agent:threat_intel"
+    # The documentation-range IP was never sent out, and that is not recorded as a gap; the
+    # tool tells the agent so instead.
+    assert not [e for e in evidence if e.source_ref == "abuseipdb:203.0.113.45"]
+    lookup = next(
+        s
+        for s in demo.agents.runs.steps(run.run_id)
+        if s.kind == "tool_result" and s.summary.startswith("lookup_abuseipdb")
+    )
+    assert "not missing telemetry" in lookup.payload["note"]
 
     kinds = [s.kind for s in demo.agents.runs.steps(run.run_id)]
     assert kinds.count("route") == 3 and kinds.count("tool_result") == 4
@@ -417,12 +422,10 @@ def test_reputation_tool_brings_searched_events_into_scope(demo, holder):
     assert "not in any event returned so far" in rejected[0].payload["error"]
     scope = demo.investigations.scope_events(inv.investigation_id)
     assert sum(ip in (e.src_ip, e.dst_ip) for e in scope) == 3
-    vt = [
-        e
-        for e in demo.investigations.evidence(inv.investigation_id)
-        if e.source_ref == f"virustotal:{ip}"
-    ]
-    assert vt and vt[0].category is EvidenceCategory.MISSING_TELEMETRY
+    # Once the IP was in the scope the second lookup ran (and, for a documentation address,
+    # explained that nothing is sent rather than recording a gap).
+    done = [s for s in steps if s.kind == "tool_result" and "lookup_virustotal" in s.summary]
+    assert len(done) == 1 and "never sent to providers" in done[0].payload["note"]
 
 
 def test_prompt_injection_in_logs_stays_data(settings, holder):
@@ -473,17 +476,19 @@ def test_prompt_injection_in_logs_stays_data(settings, holder):
     assert any("unknown tool 'close_investigation'" in s.summary for s in steps)
     assert ctx.investigations.get(inv.investigation_id).status is InvestigationStatus.OPEN
     # A benign verdict without citations is not accepted as-is.
+    assert run.assessment is not None
     assert run.assessment.disposition is Disposition.INSUFFICIENT_DATA
     assert run.assessment.adjustments
 
 
 def test_background_runner_uses_its_own_connection(tmp_path, holder):
-    settings = Settings(_env_file=None, database_path=tmp_path / "soc.db")
+    settings = make_settings(database_path=tmp_path / "soc.db")
     ctx = build_context(settings, model_factory=lambda _s: holder.model)
     load_demo_iocs(ctx.iocs)
     ingest_demo(ctx.ingestion)
     inv = _investigation(ctx)
     holder.model = ScriptedModel([route("verifier"), verdict()])
+    assert ctx.agent_runner is not None
     run_id = ctx.agent_runner.start(ctx.agents, inv.investigation_id)
     ctx.agent_runner.join(run_id, timeout=30)
     assert not ctx.agent_runner.is_running(run_id)
@@ -498,19 +503,19 @@ def test_background_runner_uses_its_own_connection(tmp_path, holder):
 def test_runner_relaunches_a_run_launched_while_its_worker_winds_down():
     import threading
 
-    from app.agents.service import AgentRunner
+    from app.agents.service import AgentRunner, AgentService
 
     release, entered = threading.Event(), threading.Event()
     calls = []
 
     class FakeService:
-        def execute(self, run_id):
+        def execute(self, run_id) -> None:
             calls.append(run_id)
             if len(calls) == 1:
                 entered.set()
                 release.wait(10)  # e.g. still announcing that the run paused
 
-    runner = AgentRunner(lambda: (FakeService(), lambda: None))
+    runner = AgentRunner(lambda: (cast(AgentService, FakeService()), lambda: None))
     runner.launch("run-1")
     assert entered.wait(10)
     runner.launch("run-1")  # Resume pressed before the first worker has exited

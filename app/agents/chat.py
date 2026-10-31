@@ -39,7 +39,7 @@ EVENT_REF = re.compile(r"\b[0-9a-f]{32}\b")
 
 
 class ChatService:
-    def __init__(self, agents: AgentService, launch: Callable[[str], None]) -> None:
+    def __init__(self, agents: AgentService, launch: Callable[[str], object]) -> None:
         """``launch(run_id)`` executes a run: on a worker thread in the app, inline in tests
         and with in-memory databases."""
         self.agents = agents

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from fixtures.settings import make_settings
 
 from app.config import Settings
 from app.context import AppContext, build_context
@@ -8,7 +9,7 @@ from app.context import AppContext, build_context
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None)
+    return make_settings()
 
 
 @pytest.fixture

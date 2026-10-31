@@ -205,7 +205,7 @@ def _render_expand(
         field = c1.selectbox("Field", fields)
         value = c2.selectbox("Value", values[field])
         minutes = c3.number_input("± minutes", min_value=1, max_value=1440, value=30, step=5)
-        if st.button("Add events to scope"):
+        if st.button("Add events to scope") and value is not None:
             try:
                 added = ctx.investigations.expand_around_entity(
                     inv.investigation_id,
