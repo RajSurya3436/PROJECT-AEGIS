@@ -69,6 +69,7 @@ GROUNDED_SOURCES = frozenset(
     {
         EvidenceSource.ALERT,
         EvidenceSource.EVENT,
+        EvidenceSource.HISTORY,
         EvidenceSource.LOCAL_IOC,
         EvidenceSource.REPUTATION,
         EvidenceSource.ANALYST,

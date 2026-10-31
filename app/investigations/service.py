@@ -37,6 +37,7 @@ from app.domain.models import (
     ReputationResult,
     TimelineEntry,
 )
+from app.investigations import context
 from app.investigations.timeline import describe_event
 from app.storage.db import transaction
 from app.storage.investigations import InvestigationRepository
@@ -117,8 +118,9 @@ class InvestigationService:
             return existing
         investigation_id = "inv-" + uuid.uuid4().hex[:12]
         objective = (objective or "").strip() or (
-            f"Determine whether alert '{alert.title}' reflects malicious activity, and find "
-            "evidence for and against compromise."
+            f"Determine whether alert '{alert.title}' reflects malicious activity (an attack, "
+            "whether or not it succeeded), whether it led to a compromise, and the evidence for "
+            "and against."
         )
         with transaction(self.conn):
             self.repo.create(investigation_id, alert.title[:200], objective[:MAX_CLAIM_CHARS])
@@ -531,7 +533,43 @@ class InvestigationService:
                 citing = [e.event_id for e in scope_events if ip in (e.src_ip, e.dst_ip)]
                 self._ioc_evidence(investigation_id, ip, citing[:MAX_CITED_EVENTS], SYSTEM)
 
+        self._context(investigation_id, alert, alert_events, start, scope_events)
         self._coverage_checks(investigation_id, alert_events, start, end, scope_events)
+
+    def _context(
+        self,
+        investigation_id: str,
+        alert: Alert,
+        alert_events: list[NormalizedEvent],
+        window_start: datetime,
+        scope_events: list[NormalizedEvent],
+    ) -> None:
+        """Related alerts, upstream SIEM detections and "seen before" history as evidence
+        (see ``app/investigations/context.py``)."""
+        scope_ids = sorted(e.event_id for e in scope_events)
+        alerted = {i for linked in self.alerts.links_for_events(scope_ids).values() for i in linked}
+        items = [
+            *context.related_alerts(self.alerts, alert, set(scope_ids)),
+            *context.siem_detections(scope_events, alerted),
+            *context.history(self.events, alert_events, window_start),
+        ]
+        sources = {
+            "related_alert": EvidenceSource.ALERT,
+            "siem": EvidenceSource.EVENT,
+            "history": EvidenceSource.HISTORY,
+        }
+        for item in items:
+            self.add_evidence(
+                investigation_id,
+                category=EvidenceCategory.OBSERVATION,
+                claim=item.claim,
+                source_type=sources[item.kind],
+                source_ref=item.ref,
+                collected_by=SYSTEM,
+                event_ids=item.event_ids,
+                provenance={"check": item.kind, **item.provenance},
+                reliability="Computed by code from stored events.",
+            )
 
     def _coverage_checks(
         self,
