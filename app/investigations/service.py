@@ -118,9 +118,8 @@ class InvestigationService:
             return existing
         investigation_id = "inv-" + uuid.uuid4().hex[:12]
         objective = (objective or "").strip() or (
-            f"Determine whether alert '{alert.title}' reflects malicious activity (an attack, "
-            "whether or not it succeeded), whether it led to a compromise, and the evidence for "
-            "and against."
+            f"Determine whether alert '{alert.title}' reflects malicious activity, and find "
+            "evidence for and against compromise."
         )
         with transaction(self.conn):
             self.repo.create(investigation_id, alert.title[:200], objective[:MAX_CLAIM_CHARS])
