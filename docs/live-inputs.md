@@ -104,18 +104,48 @@ or upload the sample: it produces 7 alerts (2 failures-then-success, 1 repeated 
 
 ## Connect a real Wazuh (optional)
 
-Needs **WSL2** and **Docker Desktop**, and about 4-6 GB of free RAM while Wazuh runs.
+Needs **WSL2** and **Docker Desktop**, and about 4-6 GB of free RAM while Wazuh runs. Tested
+with `wazuh-docker` v4.14.9, single-node.
 
-1. Admin PowerShell: `wsl --install`, then restart Windows.
-2. Install Docker Desktop for Windows (WSL2 backend) and start it.
-3. Wazuh single-node in Docker (from the official `wazuh-docker` repository, single-node
-   deployment; generate its certificates, then `docker compose up -d`).
-4. Make the manager's alert file visible on Windows. The simplest way is to copy it out
-   periodically, or bind-mount the manager's `/var/ossec/logs/alerts` directory to a Windows
-   folder in the compose file. Then *Follow a file* → that `alerts.json` → layout **Wazuh**.
-   (A file on a WSL path is reachable from Windows as `\\wsl$\<distro>\...`.)
-5. Enrol this Windows PC as a Wazuh agent (Wazuh dashboard → Deploy new agent) to see your own
-   logon events arrive as alerts.
+1. `winget install -e --id Docker.DockerDesktop`, restart Windows, start Docker Desktop (WSL 2
+   engine). Optionally cap its memory in `%UserProfile%\.wslconfig` (`[wsl2]` / `memory=8GB`).
+2. Get Wazuh and **bind its ports to this PC only**. The upstream compose file publishes them
+   on every interface, with default passwords:
+   ```powershell
+   git clone https://github.com/wazuh/wazuh-docker.git -b v4.14.9
+   cd wazuh-docker\single-node
+   (Get-Content docker-compose.yml) -replace '^(\s*- )"?(\d+:\d+(?:/udp)?)"?\s*$', '$1"127.0.0.1:$2"' | Set-Content docker-compose.yml
+   Select-String docker-compose.yml -Pattern '127\.0\.0\.1'   # expect 6 ports, including 443:5601
+   docker compose -f generate-indexer-certs.yml run --rm generator
+   wsl -d docker-desktop -u root sysctl -w vm.max_map_count=262144   # after every Docker restart
+   docker compose up -d
+   ```
+   Dashboard: https://localhost (self-signed certificate), `admin` / `SecretPassword`.
+3. In this app: *Data sources → Live inputs → HTTP receiver → Start*.
+4. Forward the manager's alerts to the receiver:
+   ```powershell
+   .venv\Scripts\python scripts\wazuh_forward.py            # new alerts only
+   .venv\Scripts\python scripts\wazuh_forward.py --from-start   # the whole alerts.json first
+   ```
+   The compose file keeps `alerts.json` in a Docker volume, so the script reads it with
+   `docker exec <manager> tail -F` (default container `single-node-wazuh.manager-1`;
+   `docker ps` shows the name) and POSTs batches of NDJSON with `adapter=wazuh`. Batches stay
+   under the receiver's limits; while the receiver is down they are kept and retried, and a
+   batch it rejects is reported and dropped. It only posts to `http://127.0.0.1` and uses
+   `HTTP_RECEIVER_TOKEN` when set.
+5. Enrol this Windows PC as a Wazuh agent (dashboard → *Agents → Deploy new agent → Windows*,
+   server address `127.0.0.1`, then `NET START WazuhSvc` in an admin PowerShell). A few wrong
+   passwords at the lock screen then arrive as Wazuh alerts, and five or more within five
+   minutes trip `auth.repeated_failures` here. Without locking the screen (no admin, and a
+   made-up user so no real account is locked out):
+   ```powershell
+   1..6 | % { net use \\127.0.0.1\IPC$ /user:soctest WrongPass123! 2>$null; Start-Sleep 35 }
+   ```
+   Each attempt is a failed network logon (4625, logon type 3, `127.0.0.1`). Space them about
+   35 s apart: Windows logs only about one failure per ~30 s for the same user, so faster
+   attempts are mostly not recorded. Tested 2026-11-01: 6 failures, one
+   `auth.repeated_failures` alert.
 
-Alternatively, forward alerts with a small script that POSTs new lines to the HTTP receiver.
-The receiver does not accept connections from containers or other machines by design.
+Stop Wazuh with `docker compose down` in `wazuh-docker\single-node` (data is kept in volumes).
+The receiver does not accept connections from containers or other machines by design; that is
+why the forwarder runs on Windows.
