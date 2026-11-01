@@ -14,6 +14,7 @@
         "network.local_ioc_match": 1
       },
       "investigate": "auth.failures_then_success",
+      "set": "tuning",
       "file": "scenarios/s1_stolen_password_payload.jsonl"
     },
     {
@@ -26,6 +27,7 @@
         "auth.failures_then_success": 1
       },
       "investigate": "auth.failures_then_success",
+      "set": "tuning",
       "file": "scenarios/s2_mistyped_password.jsonl"
     },
     {
@@ -38,6 +40,7 @@
         "process.suspicious_powershell": 6
       },
       "investigate": "process.suspicious_powershell",
+      "set": "tuning",
       "file": "scenarios/s3_deployment_powershell.jsonl"
     },
     {
@@ -50,6 +53,7 @@
         "auth.password_spray": 1
       },
       "investigate": "auth.password_spray",
+      "set": "tuning",
       "file": "scenarios/s4_password_spray.jsonl"
     },
     {
@@ -62,6 +66,7 @@
         "network.local_ioc_match": 1
       },
       "investigate": "network.local_ioc_match",
+      "set": "tuning",
       "file": "scenarios/s5_lone_ioc_hit.jsonl"
     },
     {
@@ -76,6 +81,7 @@
         "siem.high_severity_alert": 1
       },
       "investigate": "auth.failures_then_success",
+      "set": "tuning",
       "file": "scenarios/s6_wazuh_ssh_backdoor_user.jsonl"
     },
     {
@@ -88,7 +94,90 @@
         "auth.failures_then_success": 1
       },
       "investigate": "auth.failures_then_success",
+      "set": "tuning",
       "file": "scenarios/s7_unfamiliar_ip_login.jsonl"
+    },
+    {
+      "id": "h1_macro_powershell_persistence",
+      "title": "Word macro starts hidden PowerShell, IOC download, scheduled task",
+      "truth": "malicious",
+      "story": "priya opened Invoice_4471.docm; Word started hidden, encoded PowerShell that downloaded from the listed IOC address 192.0.2.77 and created a logon task.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "process.suspicious_powershell": 1,
+        "network.local_ioc_match": 1
+      },
+      "investigate": "process.suspicious_powershell",
+      "set": "holdout",
+      "file": "scenarios/h1_macro_powershell_persistence.jsonl"
+    },
+    {
+      "id": "h2_logon_script_hidden_window",
+      "title": "Domain logon script runs PowerShell hidden every morning",
+      "truth": "benign",
+      "story": "Group Policy (gpscript.exe) runs the NETLOGON drive-mapping script with a hidden window at every logon on kim's workstation; it reaches only the file server.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "process.suspicious_powershell": 6
+      },
+      "investigate": "process.suspicious_powershell",
+      "set": "holdout",
+      "file": "scenarios/h2_logon_script_hidden_window.jsonl"
+    },
+    {
+      "id": "h3_monday_typos_gateway",
+      "title": "Six users mistype once each through the usual Citrix gateway",
+      "truth": "benign",
+      "story": "Six staff who log on through CTX-GW01 (10.30.0.5) every morning each failed once and succeeded 25 seconds later. By source it looks like a spray, but each account got in on its second try from its usual source.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "auth.password_spray": 1
+      },
+      "investigate": "auth.password_spray",
+      "set": "holdout",
+      "file": "scenarios/h3_monday_typos_gateway.jsonl"
+    },
+    {
+      "id": "h4_wazuh_rdp_shadow_delete",
+      "title": "Wazuh (Windows): RDP guessing, logon, shadow copies deleted",
+      "truth": "malicious",
+      "story": "198.51.100.200 guessed Administrator's password over RDP on WIN-FS01 and deleted all volume shadow copies seven minutes later, a ransomware precursor.",
+      "adapter": "wazuh",
+      "expected_alerts": {
+        "auth.failures_then_success": 1,
+        "auth.repeated_failures": 1,
+        "siem.high_severity_alert": 2
+      },
+      "investigate": "auth.failures_then_success",
+      "set": "holdout",
+      "file": "scenarios/h4_wazuh_rdp_shadow_delete.jsonl"
+    },
+    {
+      "id": "h5_dev_installer_iex",
+      "title": "Developer pipes a web installer into Invoke-Expression",
+      "truth": "undetermined",
+      "story": "omar ran 'iex (irm https://tools.example.net/install.ps1)' from Windows Terminal. Many developer tools install this way, and so does malware; the script's content and what it did afterwards are not in the data.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "process.suspicious_powershell": 1
+      },
+      "investigate": "process.suspicious_powershell",
+      "set": "holdout",
+      "file": "scenarios/h5_dev_installer_iex.jsonl"
+    },
+    {
+      "id": "h6_service_account_ioc_vpn",
+      "title": "Backup service account guessed over VPN from a listed spray source",
+      "truth": "malicious",
+      "story": "svc_backup only ever logs on from the backup server; at 03:12 it was guessed over VPN from 192.0.2.77, an address on the IOC list as a password-spray source.",
+      "adapter": "generic",
+      "expected_alerts": {
+        "auth.failures_then_success": 1,
+        "auth.repeated_failures": 1
+      },
+      "investigate": "auth.failures_then_success",
+      "set": "holdout",
+      "file": "scenarios/h6_service_account_ioc_vpn.jsonl"
     }
   ]
 }

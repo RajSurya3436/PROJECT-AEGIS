@@ -12,6 +12,14 @@ the ground truth:
 - ``wrong``: an attack called benign (missed), a benign case called malicious (false
   accusation), or an undetermined case given a confident verdict either way (overconfident).
 - ``no verdict``: the run did not complete (model unavailable, limits, invalid output).
+
+A small local model does not give the same verdict every time, so a scenario can be run several
+times (``majority``): its grade is the most common one, ties going to the worse grade, and the
+report shows every run's grade so an unstable scenario is visible.
+
+Scenarios belong to a ``set``: ``tuning`` (s1-s7, used while improving the prompts and context
+evidence) or ``holdout`` (h1-h6, written afterwards and never tuned on). The holdout score is
+the honest one.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ import statistics
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +44,7 @@ EVAL_DIR = PROJECT_ROOT / "data" / "eval"
 MALICIOUS = {Disposition.CONFIRMED_MALICIOUS, Disposition.LIKELY_MALICIOUS}
 UNSURE = {Disposition.SUSPICIOUS_INCONCLUSIVE, Disposition.INSUFFICIENT_DATA}
 GRADES = ("correct", "cautious", "wrong", "no verdict")
+WORST_FIRST = ("wrong", "no verdict", "cautious", "correct")
 
 
 def grade(truth: str, disposition: Disposition | None) -> str:
@@ -73,6 +82,9 @@ class ScenarioResult:
     adjustments: list[str] = field(default_factory=list)
     rationale: str = ""
     error: str | None = None
+    set: str = "tuning"
+    run_grades: list[str] = field(default_factory=list)  # one per run when repeated
+    run_dispositions: list[str | None] = field(default_factory=list)
 
 
 def load_scenarios(eval_dir: Path = EVAL_DIR) -> list[dict[str, Any]]:
@@ -110,6 +122,7 @@ def run_scenario(
             expected_alerts=scenario["expected_alerts"],
             found_alerts=found,
             detection_ok=found == scenario["expected_alerts"],
+            set=scenario.get("set", "tuning"),
         )
         if not with_agents:
             return result
@@ -142,6 +155,28 @@ def run_scenario(
         ctx.conn.close()
 
 
+def majority(runs: list[ScenarioResult]) -> ScenarioResult:
+    """Combine repeated runs of one scenario: the most common grade wins, a tie goes to the
+    worse grade. The returned result is the first run with that grade (its verdict and
+    rationale), with every run's grade and verdict attached and the median time."""
+    if not runs:
+        raise ValueError("no runs to combine")
+    grades = [r.grade for r in runs if r.grade is not None]
+    if not grades:
+        return runs[0]
+    counts = Counter(grades)
+    top = max(counts.values())
+    winner = next(g for g in WORST_FIRST if counts.get(g) == top)
+    chosen = next(r for r in runs if r.grade == winner)
+    seconds = [r.seconds for r in runs if r.seconds is not None]
+    return replace(
+        chosen,
+        run_grades=grades,
+        run_dispositions=[r.disposition for r in runs],
+        seconds=round(statistics.median(seconds), 1) if seconds else None,
+    )
+
+
 def summarize(results: list[ScenarioResult]) -> dict[str, Any]:
     graded = [r for r in results if r.grade is not None]
     grades = Counter(r.grade for r in graded)
@@ -158,6 +193,9 @@ def summarize(results: list[ScenarioResult]) -> dict[str, Any]:
         "overconfident": sum(r.grade == "wrong" and r.truth == "undetermined" for r in graded),
         "median_seconds": statistics.median(seconds) if seconds else None,
         "max_seconds": max(seconds) if seconds else None,
+        "runs_per_scenario": max((len(r.run_grades) for r in graded), default=0) or 1,
+        "unstable": sum(len(set(r.run_grades)) > 1 for r in graded),
+        "wrong_in_some_run": sum("wrong" in r.run_grades or r.grade == "wrong" for r in graded),
     }
 
 
@@ -186,6 +224,21 @@ def to_markdown(
         f"{summary['false_accusations']} false accusation(s), "
         f"{summary['overconfident']} overconfident call(s) on undetermined cases",
     ]
+    if summary["runs_per_scenario"] > 1:
+        lines.append(
+            f"- {summary['runs_per_scenario']} runs per scenario, majority grade (ties count as "
+            f"the worse grade): {summary['unstable']} scenario(s) did not get the same grade "
+            f"every run; {summary['wrong_in_some_run']} had a wrong verdict in at least one run"
+        )
+    for name in sorted({r.set for r in results}):
+        part = [r for r in results if r.set == name and r.grade is not None]
+        if part and len({r.set for r in results}) > 1:
+            pg = Counter(r.grade for r in part)
+            lines.append(
+                f"- {name} set ({len(part)} scenarios): {pg['correct']} correct, "
+                f"{pg['cautious']} cautious, {pg['wrong']} wrong, {pg['no verdict']} without a "
+                f"verdict"
+            )
     if summary["median_seconds"] is not None:
         lines.append(
             f"- Time per alert: median {summary['median_seconds']:.0f} s, "
@@ -193,15 +246,16 @@ def to_markdown(
         )
     lines += [
         "",
-        "| scenario | truth | detection | verdict | grade | run | time (s) | model/tool calls "
-        "| agent evidence |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| scenario | set | truth | detection | verdict | grade | runs | run | time (s) "
+        "| model/tool calls | agent evidence |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         verdict = f"{r.disposition} ({r.confidence})" if r.disposition else "-"
         lines.append(
-            f"| {r.id} | {r.truth} | {'ok' if r.detection_ok else 'MISMATCH'} | {verdict} "
-            f"| {r.grade or '-'} | {r.run_status or '-'} | {r.seconds if r.seconds else '-'} "
+            f"| {r.id} | {r.set} | {r.truth} | {'ok' if r.detection_ok else 'MISMATCH'} "
+            f"| {verdict} | {r.grade or '-'} | {', '.join(r.run_grades) or '-'} "
+            f"| {r.run_status or '-'} | {r.seconds if r.seconds else '-'} "
             f"| {r.model_calls}/{r.tool_calls} | {r.agent_evidence} |"
         )
     lines.append("")
