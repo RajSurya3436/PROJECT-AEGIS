@@ -182,11 +182,13 @@ Kali Linux on the default **NAT** network (VMnet8). Run `ipconfig` on Windows to
    sudo WAZUH_MANAGER="192.168.198.1" WAZUH_AGENT_NAME="kali-vm" apt install -y wazuh-agent=4.14.9-1
    sudo apt-mark hold wazuh-agent
    ```
-3. **Give the agent logs to read.** Kali logs to the systemd journal only, but the agent reads
-   `/var/log/auth.log`. Install rsyslog to write it, and SSH as something to attack:
+3. **Start SSH (something to attack) and the agent.** The 4.14 agent reads the systemd
+   journal by itself (alerts show `location: journald`), so Kali needs no rsyslog. Do **not**
+   also add `/var/log/auth.log` to `ossec.conf` when rsyslog is installed: every line would then
+   be read twice and every alert counted double.
    ```bash
-   sudo apt install -y rsyslog openssh-server
-   sudo systemctl enable --now rsyslog ssh wazuh-agent
+   sudo apt install -y openssh-server
+   sudo systemctl enable --now ssh wazuh-agent
    ip -4 addr show eth0          # Kali's address, e.g. 192.168.198.128
    ```
    The dashboard (*Agents*) should list `kali-vm` as active within a minute.
@@ -200,7 +202,9 @@ Kali Linux on the default **NAT** network (VMnet8). Run `ipconfig` on Windows to
    `auth.repeated_failures` on host `kali-vm` here. Wazuh's own brute-force rule (5712, level 10)
    can also raise `siem.high_severity_alert`. The last few attempts may end in "Connection
    closed": recent OpenSSH briefly blocks an address that keeps failing (`PerSourcePenalties`).
-   Tested 2026-11-09: 27 failures, one `auth.repeated_failures` and one Wazuh rule 5712 alert.
+   Tested 2026-11-09: one `auth.repeated_failures` and one Wazuh rule 5712 alert (each attempt
+   logs two sshd lines, *Invalid user* and *Connection reset/closed*, so 10 attempts give ~14
+   failures).
 
 To undo: remove the two `192.168.198.1` lines, `docker compose up -d`, and
 `Remove-NetFirewallRule -DisplayName "Wazuh agent ports (VMware NAT only)"` (admin).
