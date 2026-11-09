@@ -149,3 +149,58 @@ with `wazuh-docker` v4.14.9, single-node.
 Stop Wazuh with `docker compose down` in `wazuh-docker\single-node` (data is kept in volumes).
 The receiver does not accept connections from containers or other machines by design; that is
 why the forwarder runs on Windows.
+
+## Monitor a VMware VM (Kali) instead of this PC (optional)
+
+Wazuh stays in Docker on Windows; the agent runs in the VM. Tested setup: VMware Workstation,
+Kali Linux on the default **NAT** network (VMnet8). Run `ipconfig` on Windows to find the
+*VMware Network Adapter VMnet8* address (here `192.168.198.1`) and use your own below.
+
+1. **Open the agent ports on the VMnet8 address only.** In
+   `wazuh-docker\single-node\docker-compose.yml`, under `wazuh.manager` → `ports`, keep the
+   `127.0.0.1` lines and add:
+   ```yaml
+   - "192.168.198.1:1514:1514"   # agent events
+   - "192.168.198.1:1515:1515"   # agent enrolment
+   ```
+   Never use `0.0.0.0` (that exposes Wazuh, with its default passwords, to your Wi-Fi).
+   Then, in an **admin** PowerShell, allow only the VMware NAT subnet through the firewall:
+   ```powershell
+   New-NetFirewallRule -DisplayName "Wazuh agent ports (VMware NAT only)" -Direction Inbound `
+     -Protocol TCP -LocalPort 1514,1515 -LocalAddress 192.168.198.1 -RemoteAddress 192.168.198.0/24 -Action Allow
+   ```
+   Restart Wazuh (`docker compose up -d`) and check with
+   `netstat -ano | findstr "192.168.198.1:151"` (two `LISTENING` lines).
+2. **In Kali**, check it can reach the manager, then install the agent at the manager's version
+   (an agent newer than the manager is refused):
+   ```bash
+   nc -zv 192.168.198.1 1515
+   curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | sudo gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import
+   sudo chmod 644 /usr/share/keyrings/wazuh.gpg
+   echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" | sudo tee /etc/apt/sources.list.d/wazuh.list
+   sudo apt update
+   sudo WAZUH_MANAGER="192.168.198.1" WAZUH_AGENT_NAME="kali-vm" apt install -y wazuh-agent=4.14.9-1
+   sudo apt-mark hold wazuh-agent
+   ```
+3. **Give the agent logs to read.** Kali logs to the systemd journal only, but the agent reads
+   `/var/log/auth.log`. Install rsyslog to write it, and SSH as something to attack:
+   ```bash
+   sudo apt install -y rsyslog openssh-server
+   sudo systemctl enable --now rsyslog ssh wazuh-agent
+   ip -4 addr show eth0          # Kali's address, e.g. 192.168.198.128
+   ```
+   The dashboard (*Agents*) should list `kali-vm` as active within a minute.
+4. **Test.** With the copilot's HTTP receiver started and `scripts\wazuh_forward.py` running,
+   from Windows (a made-up user, so no real account is involved):
+   ```powershell
+   1..10 | % { ssh -o BatchMode=yes -o StrictHostKeyChecking=no soctest@192.168.198.128 exit; Start-Sleep 3 }
+   ```
+   Each attempt logs `Invalid user soctest from 192.168.198.1` (Wazuh rule 5710, group
+   `invalid_login`), which the adapter maps to a failed logon; five or more trip
+   `auth.repeated_failures` on host `kali-vm` here. Wazuh's own brute-force rule (5712, level 10)
+   can also raise `siem.high_severity_alert`. The last few attempts may end in "Connection
+   closed": recent OpenSSH briefly blocks an address that keeps failing (`PerSourcePenalties`).
+   Tested 2026-11-09: 27 failures, one `auth.repeated_failures` and one Wazuh rule 5712 alert.
+
+To undo: remove the two `192.168.198.1` lines, `docker compose up -d`, and
+`Remove-NetFirewallRule -DisplayName "Wazuh agent ports (VMware NAT only)"` (admin).
