@@ -32,3 +32,6 @@ Thumbs.db
 
 # Evaluation results (machine-specific)
 data/eval/results/
+
+# Local technical documentation export (kept out of the repo)
+docs/PROJECT-AEGIS_Technical_Documentation.pdf
