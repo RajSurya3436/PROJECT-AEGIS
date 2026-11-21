@@ -16,7 +16,7 @@ from app.domain.errors import SocCopilotError
 from app.domain.models import Evidence, Investigation, TimelineEntry
 from app.reporting.report import build_report, to_json, to_markdown
 from app.storage.repositories import CORRELATION_FIELDS
-from app.ui import agents_panel, chat_panel, response_panel
+from app.ui import agents_panel, chat_panel, response_panel, theme
 
 ANALYST = "analyst"
 SELECTED = "investigation_id"
@@ -27,25 +27,30 @@ def _time(value: datetime | None) -> str:
 
 
 def render(ctx: AppContext) -> None:
-    st.title("Investigations")
-    st.caption(
-        "Related events, evidence with provenance, analyst chat with the agents, agent runs, "
-        "verdict and report. Log values and model output are shown as plain text."
+    theme.page_header(
+        "Investigations",
+        "Case workspace: related events, evidence with provenance, chat with the agents, agent "
+        "runs, response planning, verdict and report. Log values and model output are shown "
+        "as plain text.",
+        icon="🧪",
+        eyebrow="Respond",
     )
     investigations = ctx.investigations.repo.list()
     if not investigations:
-        st.info(
-            "No investigations yet. Open an alert in **Alert queue** and press **Investigate**."
+        theme.empty_state(
+            "No investigations yet. Open an alert in Alert queue and press Investigate.",
+            ":material/biotech:",
         )
         return
     by_id = {i.investigation_id: i for i in investigations}
     ids = list(by_id)
     current = st.session_state.get(SELECTED)
+    icons = {InvestigationStatus.OPEN: "🟢", InvestigationStatus.CLOSED: "⚪"}
     chosen = st.selectbox(
         "Investigation",
         ids,
         index=ids.index(current) if current in by_id else 0,
-        format_func=lambda i: f"[{by_id[i].status.value}] {by_id[i].title} ({i})",
+        format_func=lambda i: f"{icons[by_id[i].status]} {by_id[i].title} ({i})",
     )
     st.session_state[SELECTED] = chosen
     _render_investigation(ctx, ctx.investigations.get(chosen))
@@ -57,24 +62,45 @@ def _render_investigation(ctx: AppContext, inv: Investigation) -> None:
     evidence = service.evidence(inv.investigation_id)
     is_open = inv.status is InvestigationStatus.OPEN
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Status", inv.status.value)
-    m2.metric("Events in scope", len(timeline))
-    m3.metric("Evidence", len(evidence))
-    m4.metric("Disposition", inv.disposition.value if inv.disposition else "none")
-    st.write("**Objective**")
-    st.text(inv.objective)
+    with st.container(border=True):
+        with st.container(horizontal=True, gap="small"):
+            st.badge(
+                inv.status.value,
+                icon=":material/lock_open:" if is_open else ":material/lock:",
+                color="green" if is_open else "gray",
+            )
+            if inv.disposition:
+                st.badge(inv.disposition.value.replace("_", " "), color="violet")
+            if inv.confidence:
+                st.badge(f"confidence {inv.confidence.value}", color="blue")
+            st.badge(
+                f"{len(inv.alert_ids)} alert(s)", icon=":material/notifications:", color="gray"
+            )
+        with st.container(key=f"title-{inv.investigation_id}"):
+            st.text(inv.title)
+        st.caption(
+            f"{inv.investigation_id} · opened {_time(inv.created_at)} UTC · updated "
+            f"{_time(inv.updated_at)} UTC"
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Status", inv.status.value, border=True)
+        m2.metric("Events in scope", len(timeline), border=True)
+        m3.metric("Evidence", len(evidence), border=True)
+        m4.metric("Disposition", inv.disposition.value if inv.disposition else "none", border=True)
+        st.markdown("**Objective**")
+        with st.container(key=f"explain-{inv.investigation_id}"):
+            st.text(inv.objective)
 
     tabs = st.tabs(
         [
-            "Timeline",
-            "Evidence",
-            "Chat",
-            "Agents",
-            "Expand and look up",
-            "Response",
-            "Verdict",
-            "Report",
+            ":material/timeline: Timeline",
+            ":material/fact_check: Evidence",
+            ":material/forum: Chat",
+            ":material/smart_toy: Agents",
+            ":material/travel_explore: Expand and look up",
+            ":material/shield: Response",
+            ":material/gavel: Verdict",
+            ":material/description: Report",
         ]
     )
     with tabs[0]:
@@ -113,7 +139,7 @@ def _render_timeline(timeline: list[TimelineEntry]) -> None:
             }
             for t in timeline
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -145,7 +171,7 @@ def _render_evidence(
         items = [e for e in evidence if e.category is category]
         st.write(f"**{category.value.replace('_', ' ').capitalize()}** ({len(items)})")
         if items:
-            st.dataframe(_evidence_rows(items), use_container_width=True, hide_index=True)
+            st.dataframe(_evidence_rows(items), width="stretch", hide_index=True)
     if evidence:
         with st.expander("Provenance of one item"):
             by_id = {e.evidence_id: e for e in evidence}

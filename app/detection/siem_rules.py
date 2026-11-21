@@ -20,6 +20,8 @@ def siem_level(event: NormalizedEvent) -> int | None:
 
 class SiemHighSeverityAlert(Rule):
     rule_id: ClassVar[str] = "siem.high_severity_alert"
+    category: ClassVar[str] = "siem"
+    mitre: ClassVar[tuple[str, ...]] = ()
     version: ClassVar[int] = 1
     title: ClassVar[str] = "High-level alert from an upstream SIEM"
     description: ClassVar[str] = (

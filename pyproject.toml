@@ -25,6 +25,7 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.storage" = ["migrations/*.sql"]
+"app.ui" = ["assets/*.svg", "assets/*.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

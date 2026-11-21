@@ -6,6 +6,7 @@ import streamlit as st
 
 from app.context import AppContext
 from app.storage.audit import AuditFilters
+from app.ui import theme
 
 GROUPS = {
     "All": None,
@@ -22,11 +23,13 @@ GROUPS = {
 
 
 def render(ctx: AppContext) -> None:
-    st.title("Audit log")
-    st.caption(
+    theme.page_header(
+        "Audit log",
         "Append-only record of analyst instructions, agent runs and tool calls, external "
         "reputation requests, response proposals, approvals and simulations, and lifecycle "
-        "changes. The database refuses edits and deletions of these rows."
+        "changes. The database refuses edits and deletions of these rows.",
+        icon="📜",
+        eyebrow="Govern",
     )
     investigations = {i.investigation_id: i for i in ctx.investigations.repo.list()}
     c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
@@ -60,7 +63,7 @@ def render(ctx: AppContext) -> None:
             }
             for e in events
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     st.download_button(

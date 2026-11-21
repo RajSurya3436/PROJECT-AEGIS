@@ -291,6 +291,15 @@ class EventRepository:
     def count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
 
+    def activity_by_hour(self) -> list[tuple[str, str, int]]:
+        """(hour as 'YYYY-MM-DDTHH', event type, count) for every hour that has events.
+        Event times are stored as UTC ISO strings, so the first 13 characters are the hour."""
+        rows = self.conn.execute(
+            "SELECT substr(event_time, 1, 13) AS hour, event_type, COUNT(*) AS n FROM events"
+            " GROUP BY hour, event_type ORDER BY hour, event_type"
+        ).fetchall()
+        return [(r["hour"], r["event_type"], r["n"]) for r in rows]
+
     def count_by_type(self) -> dict[str, int]:
         rows = self.conn.execute(
             "SELECT event_type, COUNT(*) AS n FROM events GROUP BY event_type ORDER BY event_type"

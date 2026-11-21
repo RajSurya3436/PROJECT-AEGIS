@@ -45,6 +45,8 @@ def powershell_indicators(event: NormalizedEvent) -> list[str]:
 
 class SuspiciousPowerShell(Rule):
     rule_id: ClassVar[str] = "process.suspicious_powershell"
+    category: ClassVar[str] = "execution"
+    mitre: ClassVar[tuple[str, ...]] = ("T1059.001", "T1027", "T1105")
     version: ClassVar[int] = 1
     title: ClassVar[str] = "Suspicious PowerShell command line"
     description: ClassVar[str] = (

@@ -41,17 +41,23 @@ def render(ctx: AppContext) -> None:
         if was_active and not current.active:
             st.rerun()  # finished or stopped: refresh the whole page, then stop polling
 
-        b1, b2, b3, b4, b5 = st.columns(5)
+        bar = st.container(horizontal=True, gap="small")
         action = None
-        if b1.button("Start", disabled=current.active):
+        if bar.button(
+            "Start", disabled=current.active, type="primary", icon=":material/play_arrow:"
+        ):
             action = lambda: runner.start(speed=speed, max_gap_seconds=max_gap)  # noqa: E731
-        if b2.button("Pause", disabled=current.state is not ReplayState.RUNNING):
+        if bar.button(
+            "Pause", disabled=current.state is not ReplayState.RUNNING, icon=":material/pause:"
+        ):
             action = runner.pause
-        if b3.button("Resume", disabled=current.state is not ReplayState.PAUSED):
+        if bar.button(
+            "Resume", disabled=current.state is not ReplayState.PAUSED, icon=":material/resume:"
+        ):
             action = runner.resume
-        if b4.button("Stop", disabled=not current.active):
+        if bar.button("Stop", disabled=not current.active, icon=":material/stop:"):
             action = runner.stop
-        if b5.button("Restart"):
+        if bar.button("Restart", icon=":material/restart_alt:"):
             action = lambda: runner.restart(speed=speed, max_gap_seconds=max_gap)  # noqa: E731
         if action is not None:
             try:
@@ -63,11 +69,11 @@ def render(ctx: AppContext) -> None:
 
         st.progress(current.fraction, text=f"{current.position} / {current.total} records")
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("State", current.state.value)
-        m2.metric("Inserted", current.inserted)
-        m3.metric("Already stored", current.duplicates)
-        m4.metric("Quarantined", current.quarantined)
-        m5.metric("Alerts", ctx.alerts.count())
+        m1.metric("State", current.state.value, border=True)
+        m2.metric("Inserted", current.inserted, border=True)
+        m3.metric("Already stored", current.duplicates, border=True)
+        m4.metric("Quarantined", current.quarantined, border=True)
+        m5.metric("Alerts", ctx.alerts.count(), border=True)
         if current.last_event_time:
             st.caption(
                 f"Replay clock (event time, UTC): {current.last_event_time:%Y-%m-%d %H:%M:%S}"

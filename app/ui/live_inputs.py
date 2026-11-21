@@ -12,7 +12,7 @@ SAMPLE = PROJECT_ROOT / "data" / "samples" / "wazuh_alerts.jsonl"
 
 
 def render(ctx: AppContext) -> None:
-    st.subheader("Live inputs")
+    st.subheader("Live inputs", anchor=False)
     st.caption(
         "Both feed the same pipeline as uploads (normalise, deduplicate, detect). Nothing here "
         "reads system logs on its own: you choose the file or the sender."
@@ -75,20 +75,21 @@ def _tails(ctx: AppContext) -> None:
                 "source_id": config.source_id,
             }
         )
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-    c1, c2, c3 = st.columns(3)
+    st.dataframe(rows, width="stretch", hide_index=True)
+    if tails.threaded and status.running:
+        st.caption(f":material/sync: Polling every {ctx.settings.file_tail_poll_seconds:g} s")
+    elif not tails.threaded:
+        st.caption("In-memory database: use Poll now.")
+    bar = st.container(horizontal=True, gap="small")
     if tails.threaded:
         if status.running:
-            c1.success(f"Polling every {ctx.settings.file_tail_poll_seconds:g} s")
-            if c2.button("Stop following"):
+            if bar.button("Stop following", icon=":material/stop:"):
                 tails.stop()
                 st.rerun()
-        elif c1.button("Start following", type="primary"):
+        elif bar.button("Start following", type="primary", icon=":material/play_arrow:"):
             tails.start()
             st.rerun()
-    else:
-        c1.caption("In-memory database: use Poll now.")
-    if c3.button("Poll now"):
+    if bar.button("Poll now", icon=":material/refresh:"):
         results = tails.poll_all()
         st.success(
             f"Read {sum(r.bytes_read for r in results):,} bytes: "

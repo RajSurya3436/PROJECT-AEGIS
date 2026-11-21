@@ -51,6 +51,18 @@ http://127.0.0.1:8501, go to **Data sources** → **Load demo dataset**, and fol
 [docs/demo-runbook.md](docs/demo-runbook.md) for the full story (alert → investigation → chat →
 agents → verdict → simulated response → report → audit).
 
+### Desktop app (own window)
+
+```powershell
+.\.venv\Scripts\python scripts\make_desktop_shortcut.py   # once: desktop + Start menu shortcut
+```
+
+Double-click **Aegis SOC Copilot**: `app/desktop.py` starts the server on 127.0.0.1 (or reuses
+one already running), opens the copilot in its own window and stops the server when the window
+closes. The window is pywebview if installed (`pip install pywebview`), otherwise Edge or Chrome
+in app mode (no tabs or address bar, separate profile in `data/desktop-profile`). Server output
+goes to `data/logs/desktop-server.log`.
+
 ```powershell
 .\.venv\Scripts\python -m pytest -q                         # all tests; no network, no Ollama
 .\.venv\Scripts\python -m ruff check . ; .\.venv\Scripts\python -m ruff format --check .

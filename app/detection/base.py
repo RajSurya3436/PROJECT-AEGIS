@@ -38,6 +38,10 @@ class Rule(ABC):
     severity: ClassVar[Severity]
     default_config: ClassVar[dict[str, int]]
     config_help: ClassVar[dict[str, str]]
+    # Display metadata: the tactic area shown in the UI and the MITRE ATT&CK technique IDs the
+    # rule is evidence for. Neither changes what the rule matches.
+    category: ClassVar[str] = "other"
+    mitre: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
     def evaluate(

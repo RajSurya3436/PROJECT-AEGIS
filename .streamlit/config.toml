@@ -15,6 +15,22 @@ maxUploadSize = 25
 # Streamlit sends usage statistics by default; this app promises nothing leaves the machine.
 gatherUsageStats = false
 
+[theme]
+# Dark SOC console. Fonts are the system defaults so no font is fetched from the internet.
+base = "dark"
+primaryColor = "#4f8cff"
+backgroundColor = "#0b1020"
+secondaryBackgroundColor = "#131b30"
+textColor = "#e6eaf2"
+borderColor = "#24304d"
+baseRadius = "0.6rem"
+showWidgetBorder = true
+chartCategoricalColors = ["#4f8cff", "#34d399", "#fb923c", "#f43f5e", "#a78bfa", "#facc15", "#38bdf8", "#94a3b8"]
+
+[theme.sidebar]
+backgroundColor = "#0e1528"
+secondaryBackgroundColor = "#17213b"
+
 [client]
 # Uncaught errors show a generic message, not a stack trace with file paths and values.
 showErrorDetails = "none"

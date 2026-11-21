@@ -105,7 +105,9 @@
       "adapter": "generic",
       "expected_alerts": {
         "process.suspicious_powershell": 1,
-        "network.local_ioc_match": 1
+        "network.local_ioc_match": 1,
+        "process.office_child_shell": 1,
+        "process.persistence": 1
       },
       "investigate": "process.suspicious_powershell",
       "set": "holdout",
@@ -146,7 +148,8 @@
       "expected_alerts": {
         "auth.failures_then_success": 1,
         "auth.repeated_failures": 1,
-        "siem.high_severity_alert": 2
+        "siem.high_severity_alert": 2,
+        "process.inhibit_recovery": 1
       },
       "investigate": "auth.failures_then_success",
       "set": "holdout",
@@ -173,7 +176,8 @@
       "adapter": "generic",
       "expected_alerts": {
         "auth.failures_then_success": 1,
-        "auth.repeated_failures": 1
+        "auth.repeated_failures": 1,
+        "auth.success_from_ioc": 1
       },
       "investigate": "auth.failures_then_success",
       "set": "holdout",

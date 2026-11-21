@@ -5,6 +5,12 @@ detection works with Ollama stopped. Code: `app/detection/`. Every alert records
 version, a severity, a plain-language explanation, a dedup key, and the exact event IDs that
 matched (with a reason for each).
 
+Rules are **Python classes** (subclasses of `Rule` in `app/detection/base.py`), not a query
+language such as Sigma, KQL or SPL. Each one is a pure function of the stored events plus its
+integer thresholds; pattern rules use fixed, documented regular expressions. Each rule also
+carries a tactic `category` and the MITRE ATT&CK technique IDs it is evidence for (shown in the
+UI; they do not change what matches). Register a new rule in `app/detection/registry.py`.
+
 ## Rules
 
 | Rule | v | Severity | Fires when | Default thresholds |
@@ -12,9 +18,30 @@ matched (with a reason for each).
 | `auth.repeated_failures` | 1 | medium | at least N failed logons for one user from one source IP within a window | `threshold` 5, `window_seconds` 300 |
 | `auth.failures_then_success` | 1 | high | a failure burst, then a success for the same user and IP after the last failure | `failure_threshold` 3, `failure_window_seconds` 600, `success_within_seconds` 900 |
 | `auth.password_spray` | 1 | medium | failures for at least N distinct users from one source IP within a window | `distinct_users` 5, `window_seconds` 600 |
+| `auth.distributed_brute_force` | 1 | medium | failures for one user from at least N distinct source IPs within a window (T1110.001) | `distinct_sources` 4, `window_seconds` 900 |
+| `auth.success_from_ioc` | 1 | high | a successful logon whose `src_ip` is in the local IOC list (T1078) | `session_gap_seconds` 3600 |
 | `process.suspicious_powershell` | 1 | high | PowerShell command line with an indicator (below) | `min_indicators` 1, `session_gap_seconds` 600 |
+| `process.office_child_shell` | 1 | high | an Office app (Word, Excel, Outlook, ...) is the parent of cmd, PowerShell, a script host or a LOLBin (T1566.001, T1204.002) | `min_indicators` 1, `session_gap_seconds` 900 |
+| `process.credential_dumping` | 1 | critical | Mimikatz commands, LSASS dumps (procdump, comsvcs MiniDump), `reg save` of SAM/SECURITY/SYSTEM, ntdsutil IFM (T1003) | same |
+| `process.discovery_burst` | 1 | medium | at least N *different* discovery commands (whoami, net user/group, nltest, systeminfo, ipconfig, ...) by one user on one host within a window (T1087, T1069, T1082, T1016, T1033) | `distinct_commands` 3, `window_seconds` 600 |
+| `process.persistence` | 1 | medium | `schtasks /create`, Run/RunOnce key writes, `sc create`/`New-Service`, cron writes (T1053, T1547.001, T1543.003) | `min_indicators` 1, `session_gap_seconds` 900 |
+| `process.account_manipulation` | 1 | high | `net user ... /add`, adding to Administrators / Remote Desktop Users, `useradd`, `usermod -aG sudo` (T1136.001, T1098) | same |
+| `process.lolbin_abuse` | 1 | high | certutil `-urlcache`/`-decode`, bitsadmin `/transfer`, mshta with a URL or script, regsvr32 scriptlets, rundll32 JavaScript, msiexec from a URL (T1218, T1105, T1140) | same |
+| `process.log_clearing` | 1 | high | `wevtutil cl`, `Clear-EventLog`, deleting `/var/log` files, wiping shell history (T1070.001, T1070.003) | same |
+| `process.inhibit_recovery` | 1 | critical | `vssadmin delete shadows`, `wmic shadowcopy delete`, `wbadmin delete catalog`, bcdedit recovery off (T1490) | same |
 | `network.local_ioc_match` | 1 | by IOC confidence (high, medium, else low) | a network event's `dst_ip` is in the local IOC list | `session_gap_seconds` 3600 |
+| `network.port_scan` | 1 | medium | one client reaches at least N distinct `dst_ip:dst_port` pairs within a window (T1046) | `distinct_targets` 20, `window_seconds` 120 |
+| `network.lateral_movement` | 1 | high | one client reaches at least N internal hosts on admin ports 22, 135, 139, 445, 3389, 5985, 5986 within a window (T1021) | `distinct_hosts` 5, `window_seconds` 900 |
+| `network.suspicious_port` | 1 | medium | a connection to a public IP on a port used by default by C2 frameworks, RATs, IRC botnets or Tor (4444, 1337, 31337, 6667, 9050, 50050, ...) (T1571) | `session_gap_seconds` 3600 |
+| `network.large_upload` | 1 | medium | bytes sent by one client to one public IP add up to at least N MB within a window; needs `bytes_out` / `bytes_sent` (T1048, T1041) | `megabytes` 100, `window_seconds` 3600 |
 | `siem.high_severity_alert` | 1 | high from `high_level`, else medium | an upstream SIEM alert (e.g. Wazuh, `siem.rule_level`) at or above `min_level`; one alert per upstream alert | `min_level` 10, `high_level` 12 |
+
+"Same" thresholds are `min_indicators` 1 and `session_gap_seconds` 900: matches by one user on
+one host closer together than the gap share an alert. Every pattern rule has a benign
+look-alike test (`tests/integration/test_detection_extended.py`): for example `vssadmin list
+shadows`, `certutil -hashfile`, `schtasks /query` and `net localgroup administrators` do not
+fire. For the network rules, RFC 5737 documentation addresses count as public (the synthetic
+data uses them for internet hosts).
 
 All windows and gaps are inclusive: exactly `threshold` failures spanning exactly
 `window_seconds` fire, one second more does not.
@@ -82,4 +109,11 @@ Loading `data/demo/` (with its IOC list) yields exactly five alerts: 12 failed l
 from 203.0.113.45; a success for `dave` after those failures (13 events); a password spray from
 192.0.2.77 across six users; encoded and download-cradle PowerShell on WS-DAVE04; and WS-DAVE04
 connecting to the IOC-listed 203.0.113.80. The benign lookalikes (bob's two typos, admin
-PowerShell, the signed inventory script, backups) produce nothing.
+PowerShell, the signed inventory script, backups) produce nothing. The extended rule pack adds
+no demo alerts: dave's `whoami /all`, `net user /domain` and `net group ... /domain` are only two
+discovery command types (`net user` and `net group` count as one), below the default of three.
+
+On the evaluation set the extended rules add correct alerts to three malicious holdout
+scenarios (h1: Word starting a shell and a scheduled task; h4: shadow copies deleted; h6: a
+logon from an IOC-listed address) and nothing to the benign or undetermined ones;
+`data/eval/scenarios.json` lists them as expected.

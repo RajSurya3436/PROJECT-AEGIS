@@ -39,7 +39,7 @@ def render_report(report: IpReputationReport) -> None:
                     "added": ioc.added,
                 }
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     elif report.valid:
@@ -57,7 +57,7 @@ def render_report(report: IpReputationReport) -> None:
             }
             for r in report.results
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     for r in report.results:

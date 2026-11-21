@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="40" viewBox="0 0 200 40">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <path d="M18 3 L32 8 V19 C32 28 26 34 18 37 C10 34 4 28 4 19 V8 Z" fill="url(#g)"/>
+  <path d="M12 19.5 L16.5 24 L25 14.5" fill="none" stroke="#0b1020" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="42" y="19" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="15"
+        font-weight="700" fill="#e6eaf2" letter-spacing="0.5">AEGIS</text>
+  <text x="42" y="33" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="10"
+        fill="#8b98b8" letter-spacing="1.2">SOC COPILOT</text>
+</svg>

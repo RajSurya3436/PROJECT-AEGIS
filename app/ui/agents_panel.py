@@ -125,7 +125,7 @@ def _render_run(ctx: AppContext, inv: Investigation, run: AgentRun, is_open: boo
             }
             for s in steps
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     with st.expander("Detail of one step"):
@@ -153,7 +153,7 @@ def _render_assessment(ctx: AppContext, inv: Investigation, run: AgentRun, is_op
     for title, items in sections:
         if items:
             st.write(f"**{title}**")
-            st.dataframe([{"item": i} for i in items], use_container_width=True, hide_index=True)
+            st.dataframe([{"item": i} for i in items], width="stretch", hide_index=True)
     if is_open and st.button("Close investigation with this assessment"):
         try:
             ctx.investigations.close(

@@ -10,50 +10,89 @@ from app.ingestion.demo import ingest_demo
 from app.ingestion.iocs import load_demo_iocs
 from app.ingestion.parsers import detect_format
 from app.ingestion.upload import ingest_upload, preview_upload
-from app.ui import live_inputs, replay_panel
+from app.ui import live_inputs, replay_panel, theme
 
 AUTO = "auto-detect"
 
 
 def render(ctx: AppContext) -> None:
-    st.title("Data sources")
-    st.caption(
+    theme.page_header(
+        "Data sources",
         "The app only sees data you load here. It does not read Windows Event Logs, EDR alerts "
-        "or system logs on its own."
+        "or system logs on its own: upload files, replay the demo, or follow a live log.",
+        icon="🗄️",
+        eyebrow="Configure",
+    )
+    sources = ctx.sources.list_all()
+    k = st.columns(4)
+    k[0].metric("Sources", len(sources), border=True)
+    k[1].metric("Events", f"{ctx.events.count():,}", border=True)
+    k[2].metric("Quarantined rows", ctx.parse_errors.count(), border=True)
+    k[3].metric(
+        "Sources with errors",
+        sum(1 for s in sources if s.status.value == "error"),
+        border=True,
     )
 
-    st.subheader("Bundled demo dataset")
-    st.write(
-        "Synthetic events (RFC 5737 documentation IPs) and a small local IOC list. "
-        "Loading twice adds no duplicates. Detection runs on everything loaded."
+    load_tab, live_tab, health_tab = st.tabs(
+        [
+            ":material/upload_file: Load data",
+            ":material/sensors: Live inputs",
+            ":material/monitor_heart: Health and quarantine",
+        ]
     )
-    if st.button("Load demo dataset"):
-        try:
-            load_demo_iocs(ctx.iocs)  # first, so the IOC rule sees the list as events arrive
-            results = ingest_demo(ctx.ingestion)
-            st.success(
-                f"Inserted {sum(r.inserted for r in results)} new events "
-                f"({sum(r.duplicates for r in results)} already present, "
-                f"{sum(r.quarantined for r in results)} quarantined). "
-                f"{ctx.alerts.count()} alert(s) in the queue."
-            )
-        except SocCopilotError as exc:
-            st.error(str(exc))
+    with load_tab:
+        _render_load(ctx)
+    with live_tab, st.container(border=True):
+        live_inputs.render(ctx)
+    with health_tab:
+        _render_health(ctx)
 
-    replay_panel.render(ctx)
 
-    st.subheader("Upload a file")
-    limit_mb = ctx.settings.max_upload_bytes // (1024 * 1024)
-    upload = st.file_uploader(
-        f"JSONL, NDJSON, CSV or JSON (max {limit_mb} MB)",
-        type=["jsonl", "ndjson", "csv", "json"],
-    )
+def _render_load(ctx: AppContext) -> None:
+    demo, upload_col = st.columns(2, gap="medium", border=True)
+    with demo:
+        st.subheader("Bundled demo dataset", anchor=False)
+        st.write(
+            "Synthetic events (RFC 5737 documentation IPs) and a small local IOC list. "
+            "Loading twice adds no duplicates. Detection runs on everything loaded."
+        )
+        if st.button("Load demo dataset", type="primary", icon=":material/download:"):
+            try:
+                load_demo_iocs(ctx.iocs)  # first, so the IOC rule sees the list as events arrive
+                results = ingest_demo(ctx.ingestion)
+                st.success(
+                    f"Inserted {sum(r.inserted for r in results)} new events "
+                    f"({sum(r.duplicates for r in results)} already present, "
+                    f"{sum(r.quarantined for r in results)} quarantined). "
+                    f"{ctx.alerts.count()} alert(s) in the queue."
+                )
+            except SocCopilotError as exc:
+                st.error(str(exc))
+    with upload_col:
+        st.subheader("Upload a file", anchor=False)
+        limit_mb = ctx.settings.max_upload_bytes // (1024 * 1024)
+        upload = st.file_uploader(
+            f"JSONL, NDJSON, CSV or JSON (max {limit_mb} MB)",
+            type=["jsonl", "ndjson", "csv", "json"],
+        )
     if upload is not None:
-        _render_upload(ctx, upload.name, upload.getvalue())
+        with st.container(border=True):
+            _render_upload(ctx, upload.name, upload.getvalue())
 
-    live_inputs.render(ctx)
+    with st.container(border=True):
+        replay_panel.render(ctx)
 
-    st.subheader("Source health")
+
+def _render_health(ctx: AppContext) -> None:
+    with st.container(border=True):
+        _render_source_table(ctx)
+    with st.container(border=True):
+        _render_quarantine(ctx)
+
+
+def _render_source_table(ctx: AppContext) -> None:
+    st.subheader("Source health", anchor=False)
     sources = ctx.sources.list_all()
     if sources:
         st.dataframe(
@@ -71,18 +110,20 @@ def render(ctx: AppContext) -> None:
                 }
                 for s in sources
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     else:
         st.info("No sources yet.")
 
-    st.subheader("Quarantined rows")
+
+def _render_quarantine(ctx: AppContext) -> None:
+    st.subheader("Quarantined rows", anchor=False)
     errors = ctx.parse_errors.list_recent()
     if errors:
         st.dataframe(
             [{k: e[k] for k in ("source_id", "locator", "error", "raw_snippet")} for e in errors],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     else:
@@ -127,11 +168,11 @@ def _render_upload(ctx: AppContext, filename: str, content: bytes) -> None:
     if preview.unmapped:
         st.caption("Kept as-is in `extra` (not guessed): " + ", ".join(preview.unmapped))
     if preview.rows:
-        st.dataframe(preview.rows, use_container_width=True, hide_index=True)
+        st.dataframe(preview.rows, width="stretch", hide_index=True)
     if preview.errors:
         st.dataframe(
             [e.model_dump(exclude={"source_id"}) for e in preview.errors],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     if st.button("Ingest file"):
